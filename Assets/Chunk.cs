@@ -16,7 +16,7 @@ using Random = UnityEngine.Random;
 /// Each chunk may have children, recursively subdividing space.
 /// </summary>
 [BurstCompile]
-public struct Chunk
+public partial struct Chunk
 {
     public int Id;
     public int ParentId;
@@ -28,6 +28,8 @@ public struct Chunk
             return ChunkTree.instance.GetById(ParentId);
         }
     }
+
+    public bool Populated => ChunkTree.instance.BlockChanges.TryGetValue(Id, out byte p);
 
     public LocalBlockPos LocalPos;
     public BlockPath Path => ChunkTree.instance.GetPath(this);
@@ -67,8 +69,8 @@ public struct Chunk
         {
             Debug.Log("Not in tree!");
         }
-        if (ChunkTree.instance.BlockChanges.TryGetValue(Hash, out bool _)) return;
-        ChunkTree.instance.BlockChanges[Hash] = true;
+        if (Populated) return;
+        ChunkTree.instance.BlockChanges[Id] = 0;
         
         for (int x = 0; x < 16; x++)
         for (int y = 0; y < 16; y++)
@@ -90,8 +92,8 @@ public struct Chunk
         {
             Debug.Log("Not in tree!");
         }
-        if (ChunkTree.instance.BlockChanges.TryGetValue(Hash, out bool _)) return;
-        ChunkTree.instance.BlockChanges[Hash] = true;
+        if (ChunkTree.instance.BlockChanges.TryGetValue(Id, out byte _)) return;
+        ChunkTree.instance.BlockChanges[Id] = 0;
         
         for (int x = 0; x < 16; x++)
         for (int y = 0; y < 16; y++)
@@ -124,45 +126,6 @@ public struct Chunk
     public override string ToString()
     {
         return Path.ToHexString();
-    }
-    
-    public static bool IsCustomStair(int x, int y, int z)
-    {
-        // First, central 8x8x8 hole
-        if (x < y)
-            return false;
-        
-        return true; // otherwise solid
-    }
-
-    public static bool IsCustomMengerVoxel(int x, int y, int z)
-    {
-        // First, central 8x8x8 hole
-        if ((x >= 4 && x < 12 ? 1:0) +
-            (y >= 4 && y < 12 ? 1:0) +
-            (z >= 4 && z < 12 ? 1:0) >= 2)
-            return false;
-
-        int xl = x % 4;
-        int yl = y % 4;
-        int zl = z % 4;
-        
-        if ((xl >= 1 && xl <= 2 ? 1:0) +
-            (yl >= 1 && yl <= 2 ? 1:0) +
-            (zl >= 1 && zl <= 2 ? 1:0) >= 2)
-            return false;
-        
-        return true; // otherwise solid
-    }
-
-    public static bool GenerateChunk(int x, int y, int z)
-    {
-        return IsCustomSpongeVoxel(x, y, z);
-    }
-    
-    public static bool IsCustomSpongeVoxel(int x, int y, int z)
-    {
-        return noise.pnoise(new float3(x, y, z), new float3(16, 16, 16)) < 0.5f; // otherwise solid
     }
 
     /// <summary>
@@ -204,7 +167,7 @@ public struct Chunk
     public struct GenerateChildrenParallelJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<Chunk> Parents;
-        [WriteOnly] public NativeParallelHashMap <long, bool>.ParallelWriter Tree;
+        [WriteOnly] public NativeParallelHashMap <int, byte>.ParallelWriter Tree;
         public NativeList<Chunk>.ParallelWriter NewChunks;
 
         public void Execute(int i)
@@ -216,7 +179,7 @@ public struct Chunk
             }
             
             //if (Tree.TryGetValue(p.Hash, out bool _)) return;
-            Tree.TryAdd(p.Hash, true);
+            Tree.TryAdd(p.Id, 0);
         
             for (int x = 0; x < 16; x++)
             for (int y = 0; y < 16; y++)
@@ -236,7 +199,7 @@ public struct Chunk
         [ReadOnly] public NativeArray<bool> Mask;
         [ReadOnly] public NativeParallelHashMap <long, bool> Tree;       // parent chunk hashes
         [NativeDisableParallelForRestriction]
-        public NativeArray<byte> allChunks;                  // flattened storage for results
+        public NativeArray<byte> AllChunks;                  // flattened storage for results
 
         public void Execute(int i)
         {
@@ -252,7 +215,7 @@ public struct Chunk
                 var newH = BlockHasher.ExtendHash(parentHash, pos);
                 if (Tree.TryGetValue(newH, out bool _))
                 {
-                    allChunks[offset + pos.Index] = 1;
+                    AllChunks[offset + pos.Index] = 1;
                 }
             }
         }
@@ -262,11 +225,12 @@ public struct Chunk
     public struct FetchNeighborhoodJob : IJobParallelFor
     {
         [ReadOnly] public UnsafeList<BlockPath> ParentHashes; // hash of the central chunk
-        [ReadOnly] public NativeParallelHashMap <long, bool> Tree; // all existing chunks
+        [ReadOnly] public NativeParallelHashMap <long, int> Tree; // all existing chunks
         [NativeDisableParallelForRestriction] public NativeArray<byte> AllChunks; // flattened 18^3 array
 
         public void Execute(int i)
         {
+            if (!ParentHashes[i].Path.IsCreated) return;
             int size = 18; // from -1..16
 
             int resultOffset = i * 18 * 18 * 18;
@@ -280,7 +244,7 @@ public struct Chunk
                 var arr = ParentHashes[i].Add(pos, Allocator.Temp);
                 var hash = BlockHasher.RectifyPath(arr);
                 if (hash == 0) continue;
-                if (Tree.TryGetValue(hash, out bool _))
+                if (Tree.TryGetValue(hash, out int _))
                 {
                     AllChunks[resultOffset + flatIndex] = 1;
                 }

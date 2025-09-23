@@ -72,7 +72,7 @@ public struct BlockPath
 
     public void Dispose()
     {
-        Path.Dispose();
+        if (Path.IsCreated) Path.Dispose();
     }
 
     public override int GetHashCode()
@@ -96,7 +96,7 @@ public struct BlockPath
 
 public static class BlockHasher
 {
-    static readonly long[] prime_table = new long[81]
+    static readonly long[] PrimeTable = new long[81]
     {
         1000003, 1000033, 1000037, 1000039, 1000081, 1000099, 1000117, 1000121, 1000133,
         1000151, 1000159, 1000171, 1000183, 1000187, 1000193, 1000199, 1000211, 1000213,
@@ -113,7 +113,7 @@ public static class BlockHasher
     private static long GetPrime(int n)
     {
         if (n < 0) n = 0;
-        return prime_table[n % 80];
+        return PrimeTable[n % 80];
     }
 
     private const int DepthScale = 48;
@@ -240,6 +240,15 @@ public struct LocalBlockPos
         this.x = x;
         this.y = y;
         this.z = z;
+    }
+    
+    public static int MagDiff(LocalBlockPos a, LocalBlockPos b)
+    {
+        int dx = a.x - b.x;
+        int dy = a.y - b.y;
+        int dz = a.z - b.z;
+        
+        return Math.Abs(dx) + Math.Abs(dy) + Math.Abs(dz);
     }
 
     public static LocalBlockPos Origin => new LocalBlockPos(0, 0, 0);

@@ -1,29 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
-using NUnit.Framework;
 using UnityEngine;
 
 public class ChunkMeshRenderer : MonoBehaviour
 {
-    public List<(Mesh, Chunk)> chunks = new List<(Mesh, Chunk)>();
+    public Dictionary<int, (Mesh, Vector3)> Chunks = new ();
     public Material material;
 
     void Update()
     {
         RenderParams rp = new RenderParams(material);
-        foreach (var (mesh, chunk) in chunks)
+        foreach (var (mesh, pos) in Chunks.Values)
         {
-            Graphics.RenderMesh(rp, mesh, 0, transform.localToWorldMatrix * Matrix4x4.Translate(chunk.GetWorldPosition()));
+            Graphics.RenderMesh(rp, mesh, 0, transform.localToWorldMatrix * Matrix4x4.Translate(pos));
         }
     }
 
     public void AddChunk(Mesh m, Chunk chunk)
     {
-        chunks.Add((m, chunk));
+        Chunks.Add( chunk.Id, (m, chunk.GetWorldPosition()));
     }
     
     public void Clear()
     {
-        chunks.Clear();
+        Chunks.Clear();
     }
 }

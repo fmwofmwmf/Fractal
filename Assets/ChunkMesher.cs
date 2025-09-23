@@ -12,8 +12,8 @@ public static class ChunkMesher
 
     public struct Vertex
     {
-        public Vector3 position;
-        public Vector3 normal;
+        public Vector3 Position;
+        public Vector3 Normal;
     }
 
     /// <summary>
@@ -21,40 +21,40 @@ public static class ChunkMesher
     /// Returns a list of Mesh objects (null for skipped chunks).
     /// </summary>
     /// 
-    private static NativeList<Vertex>[] persistentVerts;
-    private static NativeList<int>[] persistentTris;
-    private static NativeArray<byte> persistentBlocks;
-    private static int persistentCapacity = 0; // track how many chunks allocated for
+    private static NativeList<Vertex>[] _persistentVerts;
+    private static NativeList<int>[] _persistentTris;
+    private static NativeArray<byte> _persistentBlocks;
+    private static int _persistentCapacity = 0; // track how many chunks allocated for
 
-    public static Mesh[] BuildChunkMeshes(Chunk[] chunks, bool good = true)
+    public static Mesh[] BuildChunkMeshes(NativeArray<Chunk> chunks, bool[] lodMask, bool good = true)
     {
         int count = chunks.Length;
         Mesh[] results = new Mesh[count];
         NativeArray<JobHandle> handles = new NativeArray<JobHandle>(count, Allocator.Temp);
         
         // Ensure persistent arrays are allocated and large enough
-        if (persistentVerts == null || persistentCapacity < count)
+        if (_persistentVerts == null || _persistentCapacity < count)
         {
             // Dispose old if exists
-            if (persistentVerts != null)
+            if (_persistentVerts != null)
             {
-                for (int k = 0; k < persistentCapacity; k++)
+                for (int k = 0; k < _persistentCapacity; k++)
                 {
-                    if (persistentVerts[k].IsCreated) persistentVerts[k].Dispose();
-                    if (persistentTris[k].IsCreated) persistentTris[k].Dispose();
+                    if (_persistentVerts[k].IsCreated) _persistentVerts[k].Dispose();
+                    if (_persistentTris[k].IsCreated) _persistentTris[k].Dispose();
                 }
-                persistentBlocks.Dispose();
+                _persistentBlocks.Dispose();
             }
 
-            persistentVerts = new NativeList<Vertex>[count];
-            persistentTris = new NativeList<int>[count];
-            persistentBlocks = new NativeArray<byte>(count * 18 * 18 * 18, Allocator.Persistent);
+            _persistentVerts = new NativeList<Vertex>[count];
+            _persistentTris = new NativeList<int>[count];
+            _persistentBlocks = new NativeArray<byte>(count * 18 * 18 * 18, Allocator.Persistent);
             for (int k = 0; k < count; k++)
             {
-                persistentVerts[k] = new NativeList<Vertex>(Allocator.Persistent);
-                persistentTris[k] = new NativeList<int>(Allocator.Persistent);
+                _persistentVerts[k] = new NativeList<Vertex>(Allocator.Persistent);
+                _persistentTris[k] = new NativeList<int>(Allocator.Persistent);
             }
-            persistentCapacity = count;
+            _persistentCapacity = count;
         }
         
         Profiler.BeginSample("Setup");
@@ -64,19 +64,20 @@ public static class ChunkMesher
         
         for (int i = 0; i < count; i++)
         {
-            parentHashes.Add(chunks[i].Path);
+            if (!lodMask[i]) parentHashes.Add(chunks[i].Path);
+            else parentHashes.Add(new BlockPath());
         }
         
-        for (int j = 0; j < persistentBlocks.Length; j++)
+        for (int j = 0; j < _persistentBlocks.Length; j++)
         {
-            persistentBlocks[j] = 0;
+            _persistentBlocks[j] = 0;
         }
         
         var childJob = new Chunk.FetchNeighborhoodJob
         {
             ParentHashes = parentHashes,
-            Tree = ChunkTree.instance.BlockData,
-            AllChunks = persistentBlocks
+            Tree = ChunkTree.instance.ActiveChunks,
+            AllChunks = _persistentBlocks
         };
         
         
@@ -90,8 +91,8 @@ public static class ChunkMesher
             Chunk chunk = chunks[i];
             
             float cubeSize = Mathf.Pow(16, -chunk.Depth);
-            var verts = persistentVerts[i];
-            var tris = persistentTris[i];
+            var verts = _persistentVerts[i];
+            var tris = _persistentTris[i];
 
             verts.Clear();
             tris.Clear();
@@ -115,12 +116,13 @@ public static class ChunkMesher
             {
                 var job = new ChunkMeshJob
                 {
-                    blocks = persistentBlocks,
-                    blockOffset = i * 18 * 18 * 18,
-                    size = 16,
-                    cubeScale = cubeSize,
-                    vertices = verts,
-                    triangles = tris
+                    Blocks = _persistentBlocks,
+                    BlockOffset = i * 18 * 18 * 18,
+                    LowRes = lodMask[i],
+                    Size = 16,
+                    CubeScale = cubeSize,
+                    Vertices = verts,
+                    Triangles = tris
                 };
                 handle = job.Schedule();
             }
@@ -128,12 +130,12 @@ public static class ChunkMesher
             {
                 var job = new ChunkMeshJobBad
                 {
-                    blocks = persistentBlocks,
-                    blockOffset = i * 18 * 18 * 18,
-                    size = 16,
-                    cubeScale = cubeSize,
-                    vertices = verts,
-                    triangles = tris
+                    Blocks = _persistentBlocks,
+                    BlockOffset = i * 18 * 18 * 18,
+                    Size = 16,
+                    CubeScale = cubeSize,
+                    Vertices = verts,
+                    Triangles = tris
                 };
                 handle = job.Schedule();
             }
@@ -153,8 +155,8 @@ public static class ChunkMesher
         {
             if (results[i] != null) continue;
 
-            var verts = persistentVerts[i];
-            var tris = persistentTris[i];
+            var verts = _persistentVerts[i];
+            var tris = _persistentTris[i];
 
             Mesh mesh = new Mesh();
             mesh.indexFormat = IndexFormat.UInt32;
@@ -188,17 +190,17 @@ public static class ChunkMesher
     
     public static void DisposePersistentBuffers()
     {
-        if (persistentVerts != null)
+        if (_persistentVerts != null)
         {
-            for (int k = 0; k < persistentCapacity; k++)
+            for (int k = 0; k < _persistentCapacity; k++)
             {
-                if (persistentVerts[k].IsCreated) persistentVerts[k].Dispose();
-                if (persistentTris[k].IsCreated) persistentTris[k].Dispose();
+                if (_persistentVerts[k].IsCreated) _persistentVerts[k].Dispose();
+                if (_persistentTris[k].IsCreated) _persistentTris[k].Dispose();
             }
-            persistentVerts = null;
-            persistentTris = null;
-            persistentBlocks.Dispose();
-            persistentCapacity = 0;
+            _persistentVerts = null;
+            _persistentTris = null;
+            _persistentBlocks.Dispose();
+            _persistentCapacity = 0;
         }
     }
 }

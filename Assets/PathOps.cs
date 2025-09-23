@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using Unity.Collections;
+using Unity.Mathematics;
 using UnityEngine;
 
 public static class PathOps
@@ -8,7 +9,7 @@ public static class PathOps
     /// Computes the "shell distance" between two paths.
     /// Each step is a difference in the corresponding local block position.
     /// </summary>
-    public static int ShellDistance(this BlockPath a, BlockPath b)
+    public static int StellDistance(this BlockPath a, BlockPath b)
     {
         int minDepth = Mathf.Min(a.Depth, b.Depth);
 
@@ -44,6 +45,23 @@ public static class PathOps
         // }
 
         return dist;
+    }
+    
+    public static int ShellDistance(this BlockPath pathA, BlockPath pathB)
+    {
+        int commonDepth = math.min(pathA.Depth-1, pathB.Depth-1);
+
+        int diff = 0;
+        int scale = 1;
+
+        // Walk upward from common depth to root
+        for (int d = commonDepth; d >= 0; d--)
+        {
+            diff += LocalBlockPos.MagDiff(pathA.Path[d], pathB.Path[d]) * scale;
+            scale *= 16;
+        }
+        
+        return diff;
     }
     
     /// <summary>

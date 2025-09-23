@@ -6,20 +6,27 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct ChunkMeshJob : IJob
 {
-    [ReadOnly] public NativeArray<byte> blocks; // (size+2)^3 padded
-    [ReadOnly] public int blockOffset; // offset into blocks for this chunk
-    [ReadOnly] public int size;        // is 16
-    [ReadOnly] public float cubeScale; // scale everything by this amount
+    [ReadOnly] public NativeArray<byte> Blocks; // (size+2)^3 padded
+    [ReadOnly] public int BlockOffset; // offset into blocks for this chunk
+    [ReadOnly] public bool LowRes;
+    [ReadOnly] public int Size;        // is 16
+    [ReadOnly] public float CubeScale; // scale everything by this amount
 
-    public NativeList<ChunkMesher.Vertex> vertices; // a vertex requires position and normal
-    public NativeList<int> triangles;
+    public NativeList<ChunkMesher.Vertex> Vertices; // a vertex requires position and normal
+    public NativeList<int> Triangles;
 
     public void Execute()
     {
-        vertices.Clear();
-        triangles.Clear();
+        Vertices.Clear();
+        Triangles.Clear();
+
+        if (LowRes)
+        {
+            AddCubeLowRes(CubeScale, Size);
+            return;
+        }
         
-        int paddedSize = size + 2; // 18 for padding
+        int paddedSize = Size + 2; // 18 for padding
         
         // Process each axis for greedy meshing
         for (int axis = 0; axis < 3; axis++)
@@ -45,15 +52,15 @@ public struct ChunkMeshJob : IJob
         
         // We need to check from 0 to size+1 (17 slices) to capture all boundary faces
         // Each slice compares blocks at d and d+1 in padded coordinates
-        for (int d = 0; d <= size; d++)
+        for (int d = 0; d <= Size; d++)
         {
             // Create mask for this slice
-            var mask = new NativeArray<int>(size * size, Allocator.Temp);
+            var mask = new NativeArray<int>(Size * Size, Allocator.Temp);
             
             // Fill mask by comparing adjacent blocks along the axis
-            for (int j = 0; j < size; j++)
+            for (int j = 0; j < Size; j++)
             {
-                for (int i = 0; i < size; i++)
+                for (int i = 0; i < Size; i++)
                 {
                     // Convert to padded coordinates (add 1 to account for padding offset)
                     var pos1 = new int3();
@@ -79,11 +86,11 @@ public struct ChunkMeshJob : IJob
                         // Face normal points toward the empty space
                         // If block1 is solid and block2 is empty, face points in positive axis direction
                         // If block1 is empty and block2 is solid, face points in negative axis direction
-                        mask[j * size + i] = solid1 ? 1 : -1;
+                        mask[j * Size + i] = solid1 ? 1 : -1;
                     }
                     else
                     {
-                        mask[j * size + i] = 0;
+                        mask[j * Size + i] = 0;
                     }
                 }
             }
@@ -98,21 +105,21 @@ public struct ChunkMeshJob : IJob
     private void GreedyMesh(NativeArray<int> mask, int d, int axis, int u, int v, 
                            int3 axisDir, int3 uDir, int3 vDir)
     {
-        for (int j = 0; j < size; j++)
+        for (int j = 0; j < Size; j++)
         {
-            for (int i = 0; i < size;)
+            for (int i = 0; i < Size;)
             {
-                if (mask[j * size + i] == 0)
+                if (mask[j * Size + i] == 0)
                 {
                     i++;
                     continue;
                 }
                 
-                int currentMask = mask[j * size + i];
+                int currentMask = mask[j * Size + i];
                 
                 // Measure width (along i/u direction)
                 int width = 1;
-                while (i + width < size && mask[j * size + i + width] == currentMask)
+                while (i + width < Size && mask[j * Size + i + width] == currentMask)
                 {
                     width++;
                 }
@@ -121,11 +128,11 @@ public struct ChunkMeshJob : IJob
                 int height = 1;
                 bool canExtend = true;
                 
-                while (j + height < size && canExtend)
+                while (j + height < Size && canExtend)
                 {
                     for (int k = i; k < i + width; k++)
                     {
-                        if (mask[(j + height) * size + k] != currentMask)
+                        if (mask[(j + height) * Size + k] != currentMask)
                         {
                             canExtend = false;
                             break;
@@ -143,7 +150,7 @@ public struct ChunkMeshJob : IJob
                 {
                     for (int w = 0; w < width; w++)
                     {
-                        mask[(j + h) * size + (i + w)] = 0;
+                        mask[(j + h) * Size + (i + w)] = 0;
                     }
                 }
                 
@@ -160,12 +167,12 @@ public struct ChunkMeshJob : IJob
         // Padded coord 0 = world coord -1, padded coord 1 = world coord 0, etc.
         
         var basePos = new float3();
-        basePos[axis] = (d - 1) * cubeScale;  // Convert padded coord to world coord
+        basePos[axis] = (d - 1) * CubeScale;  // Convert padded coord to world coord
 
-        basePos[axis] += cubeScale;  // Positive faces are offset by one cube
+        basePos[axis] += CubeScale;  // Positive faces are offset by one cube
         
-        basePos[u] = i * cubeScale;  // i,j are already in target chunk coordinates (0-15)
-        basePos[v] = j * cubeScale;
+        basePos[u] = i * CubeScale;  // i,j are already in target chunk coordinates (0-15)
+        basePos[v] = j * CubeScale;
         
         var normal = new float3();
         normal[axis] = isPositiveFace ? 1 : -1;
@@ -175,41 +182,129 @@ public struct ChunkMeshJob : IJob
         var vDirFloat = new float3(vDir.x, vDir.y, vDir.z);
         
         var corner1 = basePos;
-        var corner2 = basePos + uDirFloat * width * cubeScale;
-        var corner3 = basePos + uDirFloat * width * cubeScale + vDirFloat * height * cubeScale;
-        var corner4 = basePos + vDirFloat * height * cubeScale;
+        var corner2 = basePos + uDirFloat * width * CubeScale;
+        var corner3 = basePos + uDirFloat * width * CubeScale + vDirFloat * height * CubeScale;
+        var corner4 = basePos + vDirFloat * height * CubeScale;
         
-        int vertexStart = vertices.Length;
+        int vertexStart = Vertices.Length;
         
         // Add vertices
-        vertices.Add(new ChunkMesher.Vertex { position = corner1, normal = normal });
-        vertices.Add(new ChunkMesher.Vertex { position = corner2, normal = normal });
-        vertices.Add(new ChunkMesher.Vertex { position = corner3, normal = normal });
-        vertices.Add(new ChunkMesher.Vertex { position = corner4, normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = corner1, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = corner2, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = corner3, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = corner4, Normal = normal });
         
         // Add triangles (quad = 2 triangles)
         if (isPositiveFace)
         {
             // Counter-clockwise for positive face
-            triangles.Add(vertexStart + 0);
-            triangles.Add(vertexStart + 1);
-            triangles.Add(vertexStart + 2);
+            Triangles.Add(vertexStart + 0);
+            Triangles.Add(vertexStart + 1);
+            Triangles.Add(vertexStart + 2);
             
-            triangles.Add(vertexStart + 0);
-            triangles.Add(vertexStart + 2);
-            triangles.Add(vertexStart + 3);
+            Triangles.Add(vertexStart + 0);
+            Triangles.Add(vertexStart + 2);
+            Triangles.Add(vertexStart + 3);
         }
         else
         {
             // Clockwise for negative face (reverse winding)
-            triangles.Add(vertexStart + 0);
-            triangles.Add(vertexStart + 3);
-            triangles.Add(vertexStart + 2);
+            Triangles.Add(vertexStart + 0);
+            Triangles.Add(vertexStart + 3);
+            Triangles.Add(vertexStart + 2);
             
-            triangles.Add(vertexStart + 0);
-            triangles.Add(vertexStart + 2);
-            triangles.Add(vertexStart + 1);
+            Triangles.Add(vertexStart + 0);
+            Triangles.Add(vertexStart + 2);
+            Triangles.Add(vertexStart + 1);
         }
+    }
+    
+    private void AddCubeLowRes(float scale, int size)
+    {
+        // cube from (0,0,0) to (size, size, size) scaled
+        float3 min = new float3(0f, 0f, 0f) * scale;
+        float3 max = new float3(size, size, size) * scale;
+
+        int baseIndex = Vertices.Length;
+
+        // Each face needs its own set of 4 vertices (because normals differ per face)
+        // Bottom (y = min.y)
+        AddFace(
+            new float3(min.x, min.y, min.z),
+            new float3(max.x, min.y, min.z),
+            new float3(max.x, min.y, max.z),
+            new float3(min.x, min.y, max.z),
+            new float3(0, -1, 0)
+        );
+
+        // Top (y = max.y)
+        AddFace(
+            new float3(min.x, max.y, max.z),
+            new float3(max.x, max.y, max.z),
+            new float3(max.x, max.y, min.z),
+            new float3(min.x, max.y, min.z),
+            new float3(0, 1, 0)
+        );
+
+        // Front (z = max.z)
+        AddFace(
+            new float3(min.x, min.y, max.z),
+            new float3(max.x, min.y, max.z),
+            new float3(max.x, max.y, max.z),
+            new float3(min.x, max.y, max.z),
+            new float3(0, 0, 1)
+        );
+
+        // Back (z = min.z)
+        AddFace(
+            new float3(max.x, min.y, min.z),
+            new float3(min.x, min.y, min.z),
+            new float3(min.x, max.y, min.z),
+            new float3(max.x, max.y, min.z),
+            new float3(0, 0, -1)
+        );
+
+        // Left (x = min.x)
+        AddFace(
+            new float3(min.x, min.y, min.z),
+            new float3(min.x, min.y, max.z),
+            new float3(min.x, max.y, max.z),
+            new float3(min.x, max.y, min.z),
+            new float3(-1, 0, 0)
+        );
+
+        // Right (x = max.x)
+        AddFace(
+            new float3(max.x, min.y, max.z),
+            new float3(max.x, min.y, min.z),
+            new float3(max.x, max.y, min.z),
+            new float3(max.x, max.y, max.z),
+            new float3(1, 0, 0)
+        );
+    }
+
+    private void AddFace(float3 v0, float3 v1, float3 v2, float3 v3, float3 normal)
+    {
+        int start = Vertices.Length;
+
+        Vertices.Add(new ChunkMesher.Vertex { Position = v0, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = v1, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = v2, Normal = normal });
+        Vertices.Add(new ChunkMesher.Vertex { Position = v3, Normal = normal });
+
+        AddTwoTriangles(start + 0, start + 1, start + 2, start + 3);
+    }
+
+    
+    private void AddTwoTriangles(int a, int b, int c, int d)
+    {
+        Triangles.Add(a);
+        Triangles.Add(b);
+        Triangles.Add(c);
+
+        Triangles.Add(a);
+        Triangles.Add(c);
+        Triangles.Add(d);
     }
     
     private byte GetBlock(int3 pos, int paddedSize)
@@ -222,7 +317,7 @@ public struct ChunkMeshJob : IJob
             return 0; // Return empty for out of bounds
         }
         
-        int index = blockOffset + pos.z * paddedSize * paddedSize + pos.y * paddedSize + pos.x;
-        return blocks[index];
+        int index = BlockOffset + pos.z * paddedSize * paddedSize + pos.y * paddedSize + pos.x;
+        return Blocks[index];
     }
 }

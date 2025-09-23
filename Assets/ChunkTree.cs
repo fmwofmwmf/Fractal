@@ -11,12 +11,11 @@ public class ChunkTree
     public static ChunkTree instance = new ChunkTree();
     public const int Size = 1048576 * 16 * 2;
     public NativeParallelHashMap <long, int> ActiveChunks = new (Size, Allocator.Persistent);
-    public NativeParallelHashMap <long, bool> BlockData = new (Size, Allocator.Persistent);
-    public NativeParallelHashMap <long, bool> BlockChanges = new (Size, Allocator.Persistent);
-    private NativePool<Chunk> Chunks = new (Size, Allocator.Persistent);
-    //private NativePool<BlockPath> BlockPaths = new (Size, Allocator.Persistent);
+    public NativeParallelHashMap <int, byte> BlockChanges = new (Size, Allocator.Persistent);
+    private NativePool<Chunk> _chunks = new (Size, Allocator.Persistent);
+    private NativePool<BlockPath> _blockPaths = new (Size, Allocator.Persistent);
     //private NativeParallelHashMap<int, Chunk> Chunks = new (Size, Allocator.Persistent);
-    private JobHandle RunningJobs;
+    private JobHandle _runningJobs;
     public void Add(ref Chunk chunk)
     {
         
@@ -29,10 +28,9 @@ public class ChunkTree
         
         //Profiler.BeginSample("Add Operation 1");
         //ActivePaths[hash] = chunk.Path;
-        BlockData[hash] = true;
-        chunk.Id = Chunks.Alloc();
-        //if (BlockPaths.Alloc() != chunk.Id) Debug.LogError("uh oh");
-        Chunks[chunk.Id] = chunk;
+        chunk.Id = _chunks.Allocate();
+        if (_blockPaths.Allocate() != chunk.Id) Debug.LogError("uh oh");
+        _chunks[chunk.Id] = chunk;
         //Profiler.EndSample();
         
         //Profiler.BeginSample("Add Operation 2");
@@ -42,39 +40,45 @@ public class ChunkTree
 
     public void AddBatch(NativeList<Chunk> source)
     {
-        var writer = Chunks.AsParallelWriter(16*16*16, Allocator.TempJob);
+        // if (Chunks.FreeCount < source.Length * 16 * 16 * 16)
+        // {
+        //     Chunks.ExpandCapacity(source.Length * 16 * 16 * 16 - Chunks.FreeCount);
+        //     BlockPaths.ExpandCapacity(source.Length * 16 * 16 * 16 - Chunks.FreeCount);
+        // }
+
+        int b = _chunks.FreeCount;
         var childJob = new AddBatchJob
         {
             Source = source,
             ChunkIds = ActiveChunks.AsParallelWriter(),
-            BlockData = BlockData.AsParallelWriter(),
-            Target = writer
+            Target = _chunks
         };
         JobHandle handle = childJob.Schedule(source.Length, 16*16*16);
         JobHandle disposeHandle = source.Dispose(handle);
         disposeHandle.Complete();
-        int x = Chunks.CommitParallelLength(writer);
-        for (int i = 0; i < x; i++)
+        
+        //int x = Chunks.CommitParallelLength(writer);
+        for (int i = 0; i < b - _chunks.FreeCount; i++)
         {
-            //BlockPaths.Alloc();
+            _blockPaths.Allocate();
         }
         //RunningJobs = JobHandle.CombineDependencies(RunningJobs, handle, disposeHandle);
     }
 
     public void FinishBatch()
     {
-        RunningJobs.Complete();
-        RunningJobs = new();
+        _runningJobs.Complete();
+        _runningJobs = new();
     }
 
     public BlockPath GetPath(Chunk chunk)
     {
         var id = chunk.Id;
-        //var bp = BlockPaths[id];
-        // if (bp.Path.IsCreated)
-        // {
-        //     return bp;
-        // }
+        var bp = _blockPaths[id];
+         if (bp.Path.IsCreated)
+         {
+             return bp;
+         }
 
         BlockPath p;
         if (chunk.Parent.IsEmpty)
@@ -91,7 +95,8 @@ public class ChunkTree
             arr[len] = chunk.LocalPos;
             p = new BlockPath(arr);
         }
-        //BlockPaths[id] = p;
+
+        _blockPaths[id] = p;
         return p;
     }
     
@@ -100,35 +105,31 @@ public class ChunkTree
     {
         [ReadOnly] public NativeList<Chunk> Source;
         [NativeDisableParallelForRestriction][WriteOnly] public NativeParallelHashMap <long, int>.ParallelWriter ChunkIds;
-        [NativeDisableParallelForRestriction][WriteOnly] public NativeParallelHashMap <long, bool>.ParallelWriter BlockData;
-        [NativeDisableParallelForRestriction] public NativePool<Chunk>.ParallelWriter Target;
+        [NativeDisableParallelForRestriction] public NativePool<Chunk> Target;
 
         public void Execute(int i)
         {
             Chunk c = Source[i];
             var hash = Source[i].Hash;
-            BlockData.TryAdd(hash, true);
             
-            ref Chunk chunk = ref Target.AllocRef(out int id);
-            chunk = c;
-            chunk.Id = id;
-            ChunkIds.TryAdd(hash, id);
+            c.Id = Target.Allocate();
+            Target[c.Id] = c;
+            ChunkIds.TryAdd(hash, c.Id);
         }
     }
 
     public Chunk GetById(int id)
     {
         if (id < 0) return new();
-        return Chunks[id];
+        return _chunks[id];
     }
     
     public void ForceAdd(Chunk chunk, int id)
     {
         var hash = chunk.Path.Hash();
         ActiveChunks[hash] = id;
-        Chunks[id] = chunk;
+        _chunks[id] = chunk;
         //ActivePaths[hash] = chunk.Path;
-        BlockData[hash] = true;
     }
 
     // public static long RectifyPath(BlockPath path)
@@ -182,7 +183,7 @@ public class ChunkTree
         //Debug.Log(Chunks.Count());
         if (b)
         {
-            chunk = Chunks[id];
+            chunk = _chunks[id];
             if (chunk.Hash != hash) Debug.Log("huh");
         }
         else chunk = new Chunk();
@@ -191,15 +192,14 @@ public class ChunkTree
     
     public void Dispose()
     {
-        // foreach (var path in ActivePaths.GetValueArray(Allocator.Temp))
-        // {
-        //     path.Dispose();
-        // }
+        foreach (var path in _blockPaths.List)
+        {
+            path.Dispose();
+        }
         //PathCache.Dispose();
         ActiveChunks.Dispose();
-        BlockData.Dispose();
         BlockChanges.Dispose();
-        Chunks.Dispose();
-        //BlockPaths.Dispose();
+        _chunks.Dispose();
+        _blockPaths.Dispose();
     }
 }

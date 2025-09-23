@@ -7,15 +7,15 @@ using UnityEngine;
 [BurstCompile]
 public struct ChunkMeshJobBad : IJob
 {
-    [ReadOnly] public NativeArray<byte> blocks;
-    [ReadOnly] public int blockOffset;
-    [ReadOnly] public int size;
-    [ReadOnly] public float cubeScale;
+    [ReadOnly] public NativeArray<byte> Blocks;
+    [ReadOnly] public int BlockOffset;
+    [ReadOnly] public int Size;
+    [ReadOnly] public float CubeScale;
 
-    public NativeList<ChunkMesher.Vertex> vertices;
-    public NativeList<int> triangles;
+    public NativeList<ChunkMesher.Vertex> Vertices;
+    public NativeList<int> Triangles;
     
-    public static readonly int3[] faceDirections = new int3[]
+    public static readonly int3[] FaceDirections = new int3[]
     {
         new int3(1, 0, 0),
         new int3(-1, 0, 0),
@@ -25,7 +25,7 @@ public struct ChunkMeshJobBad : IJob
         new int3(0, 0, -1)
     };
     
-    public static readonly float3[] faceVertices = new float3[]
+    public static readonly float3[] FaceVertices = new float3[]
     {
         new float3(1, 0, 0),
         new float3(1, 1, 0),
@@ -55,48 +55,48 @@ public struct ChunkMeshJobBad : IJob
     
     public void Execute()
     {
-        int strideY = size + 2;
+        int strideY = Size + 2;
         int strideZ = strideY * strideY;
         
-        for (int z = 1; z <= size; z++)
+        for (int z = 1; z <= Size; z++)
         {
-            for (int y = 1; y <= size; y++)
+            for (int y = 1; y <= Size; y++)
             {
-                for (int x = 1; x <= size; x++)
+                for (int x = 1; x <= Size; x++)
                 {
                     int index = x + y * strideY + z * strideZ;
-                    if (blocks[blockOffset + index] == 0) continue;
+                    if (Blocks[BlockOffset + index] == 0) continue;
 
                     for (int face = 0; face < 6; face++)
                     {
-                        int3 dir = faceDirections[face];
+                        int3 dir = FaceDirections[face];
                         int nx = x + dir.x;
                         int ny = y + dir.y;
                         int nz = z + dir.z;
                         int neighborIndex = nx + ny * strideY + nz * strideZ;
 
-                        if (blocks[blockOffset + neighborIndex] != 0) continue;
+                        if (Blocks[BlockOffset + neighborIndex] != 0) continue;
 
-                        float3 basePos = new float3(x - 1, y - 1, z - 1) * cubeScale;
-                        int startVertexIndex = vertices.Length;
+                        float3 basePos = new float3(x - 1, y - 1, z - 1) * CubeScale;
+                        int startVertexIndex = Vertices.Length;
                         int faceBaseIndex = face * 4;
 
                         for (int i = 0; i < 4; i++)
                         {
-                            float3 vertexPos = basePos + faceVertices[faceBaseIndex + i] * cubeScale;
-                            vertices.Add(new ChunkMesher.Vertex
+                            float3 vertexPos = basePos + FaceVertices[faceBaseIndex + i] * CubeScale;
+                            Vertices.Add(new ChunkMesher.Vertex
                             {
-                                position = vertexPos,
-                                normal = (float3)dir
+                                Position = vertexPos,
+                                Normal = (float3)dir
                             });
                         }
 
-                        triangles.Add(startVertexIndex);
-                        triangles.Add(startVertexIndex + 1);
-                        triangles.Add(startVertexIndex + 2);
-                        triangles.Add(startVertexIndex);
-                        triangles.Add(startVertexIndex + 2);
-                        triangles.Add(startVertexIndex + 3);
+                        Triangles.Add(startVertexIndex);
+                        Triangles.Add(startVertexIndex + 1);
+                        Triangles.Add(startVertexIndex + 2);
+                        Triangles.Add(startVertexIndex);
+                        Triangles.Add(startVertexIndex + 2);
+                        Triangles.Add(startVertexIndex + 3);
                     }
                 }
             }
