@@ -9,7 +9,6 @@ using UnityEngine.Profiling;
 
 public static class ChunkMesher
 {
-
     public struct Vertex
     {
         public Vector3 Position;
@@ -26,7 +25,7 @@ public static class ChunkMesher
     private static NativeArray<byte> _persistentBlocks;
     private static int _persistentCapacity = 0; // track how many chunks allocated for
 
-    public static Mesh[] BuildChunkMeshes(NativeArray<Chunk> chunks, bool[] lodMask, bool good = true)
+    public static Mesh[] BuildChunkMeshes(NativeArray<Chunk> chunks, bool[] lodMask, int scale, bool good = true)
     {
         int count = chunks.Length;
         Mesh[] results = new Mesh[count];
@@ -64,19 +63,23 @@ public static class ChunkMesher
         
         for (int i = 0; i < count; i++)
         {
-            if (!lodMask[i]) parentHashes.Add(chunks[i].Path);
+            if (!lodMask[i])
+            {
+                parentHashes.Add(chunks[i].Path);
+            }
             else parentHashes.Add(new BlockPath());
         }
         
-        for (int j = 0; j < _persistentBlocks.Length; j++)
-        {
-            _persistentBlocks[j] = 0;
-        }
+        // for (int j = 0; j < _persistentBlocks.Length; j++)
+        // {
+        //     _persistentBlocks[j] = 0;
+        // }
         
-        var childJob = new Chunk.FetchNeighborhoodJob
+        var childJob = new ChunkJobs.FetchNeighborsJob
         {
             ParentHashes = parentHashes,
             Tree = ChunkTree.instance.ActiveChunks,
+            Leaves = ChunkTree.instance.Leaves,
             AllChunks = _persistentBlocks
         };
         
@@ -90,26 +93,13 @@ public static class ChunkMesher
         {
             Chunk chunk = chunks[i];
             
-            float cubeSize = Mathf.Pow(16, -chunk.Depth);
+            float cubeSize = Mathf.Pow(16, scale-chunk.Depth);
             var verts = _persistentVerts[i];
             var tris = _persistentTris[i];
 
             verts.Clear();
             tris.Clear();
-            
-            
-            
-            // int childCount = 0;
-            // foreach (var c in chunk.Children)
-            // {
-            //     blocks[c.Path.Local.Index] = 1;
-            //     childCount++;
-            // }
-            // if (childCount == 0)
-            // {
-            //     results[i] = null;
-            //     continue;
-            // }
+
             JobHandle handle;
 
             if (good)
@@ -139,9 +129,7 @@ public static class ChunkMesher
                 };
                 handle = job.Schedule();
             }
-
-            // Dispose childPositions after job completes
-            //handle = JobHandle.CombineDependencies(handle);
+            
             handles[i] = handle;
         }
         Profiler.EndSample();

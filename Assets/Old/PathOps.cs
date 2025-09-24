@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -47,7 +48,7 @@ public static class PathOps
         return dist;
     }
     
-    public static int ShellDistance(this BlockPath pathA, BlockPath pathB)
+    public static int ShellDista(this BlockPath pathA, BlockPath pathB)
     {
         int commonDepth = math.min(pathA.Depth-1, pathB.Depth-1);
 
@@ -57,11 +58,58 @@ public static class PathOps
         // Walk upward from common depth to root
         for (int d = commonDepth; d >= 0; d--)
         {
-            diff += LocalBlockPos.MagDiff(pathA.Path[d], pathB.Path[d]) * scale;
+            diff += LocalBlockPos.MagDiffWrapped(pathA.Path[d], pathB.Path[d]) * scale;
             scale *= 16;
         }
         
         return diff;
+    }
+    
+    [BurstCompile]
+    public static int ShellDistance(this BlockPath pathA, BlockPath pathB)
+    {
+        int depth = math.min(pathA.Depth, pathB.Depth);
+
+        // 1. find divergence depth
+        int divDepth = -1;
+        for (int d = 0; d < depth; d++)
+        {
+            if (!pathA.Path[d].Equals(pathB.Path[d]))
+            {
+                divDepth = d;
+                break;
+            }
+        }
+
+        // if completely equal up to min depth
+        if (divDepth == -1)
+            return 0;
+
+        int suffixDepthA = pathA.Depth - divDepth;
+        int suffixDepthB = pathB.Depth - divDepth;
+        int suffixDepth = math.min(suffixDepthA, suffixDepthB);
+
+        // 2. flatten suffix to coordinates
+        int3 coordA = FlattenSuffix(pathA, divDepth, suffixDepth);
+        int3 coordB = FlattenSuffix(pathB, divDepth, suffixDepth);
+
+        // 3. compute wrapped difference
+        int dx = math.abs(coordA.x - coordB.x);
+        int dy = math.abs(coordA.y - coordB.y);
+        int dz = math.abs(coordA.z - coordB.z);
+
+        return dx + dy + dz;
+    }
+
+    private static int3 FlattenSuffix(BlockPath path, int divDepth, int suffixDepth)
+    {
+        int3 result = int3.zero;
+        for (int i = 0; i < suffixDepth; i++)
+        {
+            result *= 16;
+            result += path.Path[divDepth + i];
+        }
+        return result;
     }
     
     /// <summary>

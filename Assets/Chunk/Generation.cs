@@ -1,11 +1,11 @@
 using Unity.Mathematics;
 
-public partial struct Chunk
+public struct Generation
 {
-    
-    public static bool GenerateChunk(int x, int y, int z)
+    public static byte GenerateChunk(Chunk c, int x, int y, int z)
     {
-        return IsCustomMengerVoxel(x, y, z);
+        if (c.Type == 0) return 0;
+        return (byte)(IsCustomMengerVoxel(x, y, z) ? 1 : 0);
     }
     
     public static bool IsCustomStair(int x, int y, int z)
@@ -36,8 +36,6 @@ public partial struct Chunk
         
         return true; // otherwise solid
     }
-
-    
     
     public static bool IsCustomSpongeVoxel(int x, int y, int z)
     {

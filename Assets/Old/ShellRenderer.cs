@@ -22,50 +22,50 @@ public class ShellRenderer : MonoBehaviour
     public ChunkMeshRenderer manager; // handles meshes
 
     public List<int> fallbackDepths; // resolution for shells (fallbackDepths[i] = depth for chunks i shells away)
+    public List<int> lodRanges;
     public LocalBlockPos[] center;
     public bool quality;
     private BlockPath _center;
     private readonly Queue<Chunk> _processQueue = new ();
     private readonly Queue<(Chunk, bool)> _renderQueue = new();
     private Chunk _root;
+    
+    public Transform player;
+    private BlockPath _playerPos;
+    private bool IsWorking => _processQueue.Count > 0 || _renderQueue.Count > 0;
+    
+    public int BaseDepth => _center.Depth - 1;
 
     public TextMeshProUGUI text;
 
     void Start()
     {
-        _root = new Chunk(new(), LocalBlockPos.Origin);
-        //var boot = new Chunk(root, new LocalBlockPos(1,0,0));
-        //var boot1 = new Chunk(boot, new LocalBlockPos(0,0,0));
+        _root = new Chunk(new(), 0,0,0, 1);
         ChunkTree.instance.Add(ref _root);
-        // ChunkTree.instance.Add(boot);
-        // ChunkTree.instance.Add(boot1);
-        // Debug.Log($"Target: {boot1.Path.Hash()}");
-        // ChunkTree.instance.TryGetChunk(PathOps.FromPositions(new LocalBlockPos(0, 0, 0), new LocalBlockPos(0, 0, 0), new LocalBlockPos(16, 0, 0)), out var chunk);
-        // Debug.Log(chunk);
-        
         _center = PathOps.FromPositions(center);
         ResetQueue();
-        
-        // var p = PathOps.FromPositions(new LocalBlockPos(1,2,3));
-        // var h = p.Add(new LocalBlockPos(4, 5, 6));
-        // Debug.Log(p.HashWithChild(new LocalBlockPos(4, 5, 6)));
-        // Debug.Log(h.Hash());
-        
-        // var p = PathOps.FromPositions(new LocalBlockPos(1,2,3));
-        // Debug.Log(p.Hash());
-        // Debug.Log(BlockHasher.ExtendHash(0, 1, 2, 3));
-
-        // for (int i = 0; i < 16; i++)
-        // {
-        //     Debug.Log(noise.pnoise(new float3(0, i+.5f, 0), new float3(16f, 16f, 16f)));
-        // }
-        
+        ChunkTree.instance.renderer = manager;
     }
 
     void Update()
     {
+        // TODO add in place methods
+        int3 disp = (int3)math.floor(player.position);
+        var currentPPos = BlockPath.RectifyPathToCoords(_center.Displace(new LocalBlockPos(disp)), Allocator.Persistent);
+        if (!currentPPos.Equals(_playerPos))
+        {
+            ReEvaluateTree();
+        }
+        _playerPos.Dispose();
+        _playerPos = currentPPos;
+        _center.Dispose();
+        _center = PathOps.FromPositions(center);
+        Render();
+    }
+
+    private void Render()
+    {
         text.text = $"{_processQueue.Count} {_renderQueue.Count}\n{ChunkTree.instance.ActiveChunks.Count()}";
-        //ChunkTree.instance.RunningJobs.Complete();
 
         if (_processQueue.Count > 0)
         {
@@ -82,7 +82,7 @@ public class ShellRenderer : MonoBehaviour
             ProcessBatch(batch);
             batch.Dispose();
         }
-        else if (_renderQueue.Count > 0)
+        if (_renderQueue.Count > 0)
         {
             int count = Mathf.Min(renderPerFrame, _renderQueue.Count);
             
@@ -101,7 +101,16 @@ public class ShellRenderer : MonoBehaviour
         
             batch.Dispose();
         }
-        
+    }
+
+    public void ReEvaluateTree()
+    {
+        if (IsWorking)
+        {
+            Debug.LogError("Already Working!");
+            return;
+        }
+        _processQueue.Enqueue(_root);
         
     }
 
@@ -123,26 +132,76 @@ public class ShellRenderer : MonoBehaviour
     private void ProcessBatch(NativeArray<Chunk> batch)
     {
         if (batch.Length == 0) return;
+        
         NativeList<Chunk> childTargets = new NativeList<Chunk>(batch.Length, Allocator.TempJob);
+        //NativeList<Chunk> cullTargets = new NativeList<Chunk>(batch.Length, Allocator.TempJob);
         for (int i = 0; i < batch.Length; i++)
         {
             Chunk chunk = batch[i];
             
-            int shellDistance = chunk.Path.ShellDistance(_center);
-            
-            int depthDiff = _center.Depth - chunk.Depth;
-
+            int shellDistance = chunk.Path.ShellDistance(_playerPos);
+            int depthDiff = _playerPos.Depth - chunk.Depth;
             int renderRange = GetRenderRange(chunk, depthDiff);
-            
-            if (shellDistance <= renderRange && depthDiff != 0 && !chunk.Populated)
+
+
+            if (depthDiff > 0)
             {
-                childTargets.Add(chunk);
+                byte targetRes;
+                if (shellDistance <= renderRange)
+                {
+                    targetRes = 0b11;
+                }
+                else if (shellDistance <= lodRanges[depthDiff])
+                {
+                    targetRes = 0b10;
+                }
+                else
+                {
+                    targetRes = 0b01;
+                }
+                
+                if (chunk.RenderState == targetRes)
+                {
+                    if (targetRes != 0b11)
+                    {
+                        batch[i] = new();
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (targetRes == 0b11)
+                    {
+                        ChunkTree.instance.UnRenderChunk(chunk);
+                        if (!chunk.Populated) childTargets.Add(chunk);
+                    }
+                    else if (targetRes == 0b10)
+                    {
+                        if (chunk.Populated)
+                        {
+                            ChunkTree.instance.UnRenderChunk(chunk);
+                            ChunkTree.instance.Depopulate(chunk);
+                        }
+                    }
+                    else
+                    {
+                        if (chunk.Populated)
+                        {
+                            ChunkTree.instance.UnRenderChunk(chunk);
+                            ChunkTree.instance.Depopulate(chunk);
+                        }
+                    }
+                }
             }
-            else
+            else if (depthDiff < 0) // Too small
             {
-                if (shellDistance < 4 && !chunk.Populated) childTargets.Add(chunk);
+                ChunkTree.instance.UnRenderChunk(chunk);
+                ChunkTree.instance.Depopulate(chunk);
+                batch[i] = new();
             }
         }
+        
+        //cullTargets.Dispose();
         
         Profiler.BeginSample("Generate Children");
         NativeList<Chunk> children = Chunk.GenerateChildrenParallel(childTargets.AsArray());
@@ -155,15 +214,18 @@ public class ShellRenderer : MonoBehaviour
         for (int i = 0; i < batch.Length; i++)
         {
             Chunk chunk = batch[i];
+            if (batch[i].IsEmpty) continue;
             
-            int shellDistance = chunk.Path.ShellDistance(_center);
+            if (!chunk.Path.Path.IsCreated) Debug.LogError($"{chunk.ToString()} error");
             
-            int depthDiff = _center.Depth - chunk.Depth;
-
+            int shellDistance = chunk.Path.ShellDistance(_playerPos);
+            int depthDiff = _playerPos.Depth - chunk.Depth;
             int renderRange = GetRenderRange(chunk, depthDiff);
-            
-            if (shellDistance <= renderRange && depthDiff != 0)
+
+
+            if (shellDistance <= renderRange && depthDiff > 0) 
             {
+                ChunkTree.instance.BlockChanges[chunk.Id] |= 0b110; // subdivided tag
                 foreach (var child in chunk.Children)
                 {
                     _processQueue.Enqueue(child);
@@ -171,7 +233,10 @@ public class ShellRenderer : MonoBehaviour
             }
             else
             {
-                _renderQueue.Enqueue((chunk, shellDistance >= 4));
+                if (chunk.Type != 0)
+                { 
+                    _renderQueue.Enqueue((chunk, shellDistance >= lodRanges[depthDiff]));
+                }
             }
         }
         Profiler.EndSample();
@@ -179,7 +244,7 @@ public class ShellRenderer : MonoBehaviour
 
     private int GetRenderRange(Chunk chunk, int depthDiff)
     {
-        int shellDistance = chunk.Path.ShellDistance(_center);
+        int shellDistance = chunk.Path.ShellDistance(_playerPos);
         
         if (depthDiff < 0) return -1;
             
@@ -205,21 +270,23 @@ public class ShellRenderer : MonoBehaviour
         for (int i = 0; i < batch.Length; i++)
         {
             Chunk chunk = batch[i];
-            ChunkTree.instance.BlockChanges[chunk.Id] = lowRes[i] ? (byte)1 : (byte)2;
+            manager.RemoveChunk(chunk);
+            ChunkTree.instance.BlockChanges[chunk.Id] |= lowRes[i] ? (byte)0b010 : (byte)0b100;
         }
         Profiler.EndSample();
         Profiler.BeginSample("Build");
-        var meshes = ChunkMesher.BuildChunkMeshes(batch, lowRes, quality);
+        var meshes = ChunkMesher.BuildChunkMeshes(batch, lowRes, BaseDepth, quality);
         Profiler.EndSample();
         for (int i = 0; i < meshes.Length; i++)
         {
-            manager.AddChunk(meshes[i], batch[i]);
+            manager.AddChunk(meshes[i], batch[i], _center);
         }
     }
 
     private void OnDestroy()
     {
         _center.Dispose();
+        _playerPos.Dispose();
         ChunkMesher.DisposePersistentBuffers();
         ChunkTree.instance.Dispose();
     }
