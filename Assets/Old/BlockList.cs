@@ -12,7 +12,7 @@ public unsafe struct BlockList : System.IDisposable
     [NativeDisableUnsafePtrRestriction]
     private UnsafeList<Chunk> _mItems1;
     [NativeDisableUnsafePtrRestriction]
-    private UnsafeList<BlockPath> _mItems2;
+    private UnsafeList<ChunkPath> _mItems2;
     
     [NativeDisableUnsafePtrRestriction] 
     private UnsafeList<int> _mFreeIndices;
@@ -32,7 +32,7 @@ public unsafe struct BlockList : System.IDisposable
     {
         _mAllocator = allocator;
         _mItems1 = new UnsafeList<Chunk>(initialCapacity, allocator);
-        _mItems2 = new UnsafeList<BlockPath>(initialCapacity, allocator);
+        _mItems2 = new UnsafeList<ChunkPath>(initialCapacity, allocator);
         _mFreeIndices = new UnsafeList<int>(initialCapacity, allocator);
         _mNextFreeIndex = (int*)UnsafeUtility.Malloc(sizeof(int), sizeof(int), allocator);
         *_mNextFreeIndex = -1;
@@ -157,7 +157,7 @@ public unsafe struct BlockList : System.IDisposable
         return _mItems1;
     }
     
-    public ref BlockPath GetPath(int index)
+    public ref ChunkPath GetPath(int index)
     {
         if (index < 0 || index >= _mItems1.Length)
         {
@@ -166,7 +166,7 @@ public unsafe struct BlockList : System.IDisposable
         return ref _mItems2.ElementAt(index);
     }
     
-    public void SetPath(BlockPath path, int index)
+    public void SetPath(ChunkPath path, int index)
     {
         if (index < 0 || index >= _mItems1.Length)
         {

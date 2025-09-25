@@ -35,7 +35,7 @@ public struct Chunk
     public bool Populated => (ChunkTree.instance.BlockChanges[Id] & 1) != 0;
 
     public LocalBlockPos LocalPos;
-    public BlockPath Path => ChunkTree.instance.GetPath(this);
+    public ChunkPath Path => ChunkTree.instance.GetPath(this);
 
     public long Hash {get; private set;}
     
@@ -128,7 +128,7 @@ public struct Chunk
         return pos;
     }
     
-    public Vector3 GetRelativeWorldPosition(BlockPath origin)
+    public Vector3 GetRelativeWorldPosition(ChunkPath origin)
     {
         Vector3 pos = Vector3.zero;
         float scale = math.pow(16, origin.Depth-1);
@@ -144,7 +144,7 @@ public struct Chunk
     }
 
     // Helper: convert path to coordinates in [0, 16^depth)
-    private static Vector3 FlattenToDepth(int depth, BlockPath path)
+    private static Vector3 FlattenToDepth(int depth, ChunkPath path)
     {
         Vector3 pos = Vector3.zero;
         for (int i = 0; i < path.Depth; i++)

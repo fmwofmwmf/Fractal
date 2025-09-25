@@ -16,7 +16,7 @@ public class ChunkTree
     public NativeParallelHashMap <long, int> ActiveChunks = new (Size, Allocator.Persistent);
     public NativePool<byte> BlockChanges = new (Size, Allocator.Persistent);
     private NativePool<Chunk> _chunks = new (Size, Allocator.Persistent);
-    private NativePool<BlockPath> _blockPaths = new (Size, Allocator.Persistent);
+    private NativePool<ChunkPath> _blockPaths = new (Size, Allocator.Persistent);
     private NativePool<NativeArray<byte>> _chunkLeaves = new (Size, Allocator.Persistent);
 
     public UnsafeList<NativeArray<byte>> Leaves => _chunkLeaves.List;
@@ -147,7 +147,7 @@ public class ChunkTree
         BlockChanges[chunk.Id] &= 0b11111110;
     }
 
-    public BlockPath GetPath(Chunk chunk)
+    public ChunkPath GetPath(Chunk chunk)
     {
         var id = chunk.Id;
         var bp = _blockPaths[id];
@@ -156,7 +156,7 @@ public class ChunkTree
              return bp;
          }
 
-        BlockPath p;
+        ChunkPath p;
         if (chunk.Parent.IsEmpty)
         {
             p = PathOps.FromPositions(chunk.LocalPos);
@@ -169,7 +169,7 @@ public class ChunkTree
             for (int i = 0; i < len; i++)
                 arr[i] = parentPath.Path[i];
             arr[len] = chunk.LocalPos;
-            p = new BlockPath(arr);
+            p = new ChunkPath(arr);
         }
 
         _blockPaths[id] = p;
@@ -201,7 +201,7 @@ public class ChunkTree
         return _chunks[id];
     }
     
-    public bool TryGetChunk(BlockPath path, out Chunk chunk)
+    public bool TryGetChunk(ChunkPath path, out Chunk chunk)
     {
         return TryGetChunk(BlockHasher.RectifyPath(path), out chunk);
     }

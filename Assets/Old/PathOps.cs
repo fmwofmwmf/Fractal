@@ -10,7 +10,7 @@ public static class PathOps
     /// Computes the "shell distance" between two paths.
     /// Each step is a difference in the corresponding local block position.
     /// </summary>
-    public static int StellDistance(this BlockPath a, BlockPath b)
+    public static int StellDistance(this ChunkPath a, ChunkPath b)
     {
         int minDepth = Mathf.Min(a.Depth, b.Depth);
 
@@ -48,7 +48,7 @@ public static class PathOps
         return dist;
     }
     
-    public static int ShellDista(this BlockPath pathA, BlockPath pathB)
+    public static int ShellDista(this ChunkPath pathA, ChunkPath pathB)
     {
         int commonDepth = math.min(pathA.Depth-1, pathB.Depth-1);
 
@@ -66,7 +66,7 @@ public static class PathOps
     }
     
     [BurstCompile]
-    public static int ShellDistance(this BlockPath pathA, BlockPath pathB)
+    public static int ShellDistance(this ChunkPath pathA, ChunkPath pathB)
     {
         int depth = math.min(pathA.Depth, pathB.Depth);
 
@@ -101,7 +101,7 @@ public static class PathOps
         return dx + dy + dz;
     }
 
-    private static int3 FlattenSuffix(BlockPath path, int divDepth, int suffixDepth)
+    private static int3 FlattenSuffix(ChunkPath path, int divDepth, int suffixDepth)
     {
         int3 result = int3.zero;
         for (int i = 0; i < suffixDepth; i++)
@@ -116,9 +116,9 @@ public static class PathOps
     /// Creates a BlockPath from a sequence of LocalBlockPos.
     /// The first element should be the root, last the deepest child.
     /// </summary>
-    public static BlockPath FromPositions(params LocalBlockPos[] positions)
+    public static ChunkPath FromPositions(params LocalBlockPos[] positions)
     {
-        var path = new BlockPath();
+        var path = new ChunkPath();
         path.Path = new NativeArray<LocalBlockPos>(positions.Length, Allocator.Persistent);
         for (int i = 0; i < positions.Length; i++)
         {

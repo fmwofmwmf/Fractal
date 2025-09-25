@@ -21,7 +21,7 @@ public class ChunkMeshRenderer : MonoBehaviour
         Chunks.Remove(chunk.Id);
     }
 
-    public void AddChunk(Mesh m, Chunk chunk, BlockPath origin)
+    public void AddChunk(Mesh m, Chunk chunk, ChunkPath origin)
     {
         Chunks[chunk.Id] = (m, chunk.GetRelativeWorldPosition(origin));
     }

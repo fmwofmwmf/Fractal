@@ -66,7 +66,7 @@ public static class ChunkJobs
     [BurstCompile]
     public struct FetchNeighborhoodJob : IJobParallelFor
     {
-        [ReadOnly] public UnsafeList<BlockPath> ParentHashes; // hash of the central chunk
+        [ReadOnly] public UnsafeList<ChunkPath> ParentHashes; // hash of the central chunk
         [ReadOnly] public NativeParallelHashMap <long, int> Tree; // all existing chunks
         [NativeDisableParallelForRestriction] public NativeArray<byte> AllChunks; // flattened 18^3 array
 
@@ -97,7 +97,7 @@ public static class ChunkJobs
     [BurstCompile]
     public struct FetchNeighborsJob : IJobParallelFor
     {
-        [ReadOnly] public UnsafeList<BlockPath> ParentHashes; // hash of the central chunk
+        [ReadOnly] public UnsafeList<ChunkPath> ParentHashes; // hash of the central chunk
         [ReadOnly] public UnsafeList<NativeArray<byte>> Leaves; // hash of the central chunk
         [ReadOnly] public NativeParallelHashMap <long, int> Tree; // all existing chunks
         [NativeDisableParallelForRestriction] public NativeArray<byte> AllChunks; // flattened 18^3 array

@@ -25,13 +25,13 @@ public class ShellRenderer : MonoBehaviour
     public List<int> lodRanges;
     public LocalBlockPos[] center;
     public bool quality;
-    private BlockPath _center;
+    private ChunkPath _center;
     private readonly Queue<Chunk> _processQueue = new ();
     private readonly Queue<(Chunk, bool)> _renderQueue = new();
     private Chunk _root;
     
     public Transform player;
-    private BlockPath _playerPos;
+    private ChunkPath _playerPos;
     private bool IsWorking => _processQueue.Count > 0 || _renderQueue.Count > 0;
     
     public int BaseDepth => _center.Depth - 1;
@@ -51,7 +51,7 @@ public class ShellRenderer : MonoBehaviour
     {
         // TODO add in place methods
         int3 disp = (int3)math.floor(player.position);
-        var currentPPos = BlockPath.RectifyPathToCoords(_center.Displace(new LocalBlockPos(disp)), Allocator.Persistent);
+        var currentPPos = ChunkPath.RectifyPathToCoords(_center.Displace(new LocalBlockPos(disp)), Allocator.Persistent);
         if (!currentPPos.Equals(_playerPos))
         {
             ReEvaluateTree();

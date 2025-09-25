@@ -31,7 +31,7 @@ public static class BlockHasher
     private const int DepthScale = 48;
 
     [BurstCompile]
-    public static long RectifyPath(BlockPath path)
+    public static long RectifyPath(ChunkPath path)
     {
         int depth = path.Depth;
         if (depth == 0) return 0;
@@ -99,7 +99,7 @@ public static class BlockHasher
     }
     
     [BurstCompile]
-    public static long Hash(BlockPath path)
+    public static long Hash(ChunkPath path)
     {
         return Hash(path.Path);
     }

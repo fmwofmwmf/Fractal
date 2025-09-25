@@ -59,7 +59,7 @@ public static class ChunkMesher
         Profiler.BeginSample("Setup");
 
         Profiler.BeginSample("GetChild");
-        var parentHashes = new UnsafeList<BlockPath>(count, Allocator.TempJob);
+        var parentHashes = new UnsafeList<ChunkPath>(count, Allocator.TempJob);
         
         for (int i = 0; i < count; i++)
         {
@@ -67,7 +67,7 @@ public static class ChunkMesher
             {
                 parentHashes.Add(chunks[i].Path);
             }
-            else parentHashes.Add(new BlockPath());
+            else parentHashes.Add(new ChunkPath());
         }
         
         // for (int j = 0; j < _persistentBlocks.Length; j++)

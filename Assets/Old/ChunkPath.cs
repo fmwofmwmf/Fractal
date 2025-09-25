@@ -10,21 +10,21 @@ using UnityEngine;
 /// Useful as a dictionary key or unique identifier.
 /// </summary>
 [Serializable]
-public struct BlockPath
+public struct ChunkPath
 {
     // triples of coordinates [0...15], getting finer
     [field:SerializeField] public NativeArray<LocalBlockPos> Path { get; set; }
     public LocalBlockPos Local => Path[^1];
     public int Depth => Path.Length;
 
-    public BlockPath(NativeArray<LocalBlockPos> path)
+    public ChunkPath(NativeArray<LocalBlockPos> path)
     {
         Path = path;
     }
 
     public override bool Equals(object obj)
     {
-        if (obj is BlockPath other && other.Depth == Depth)
+        if (obj is ChunkPath other && other.Depth == Depth)
         {
             for (int i = 0; i < Depth; i++)
                 if (!Path[i].Equals(other.Path[i])) return false;
@@ -33,7 +33,7 @@ public struct BlockPath
         return false;
     }
     
-    public BlockPath Add(LocalBlockPos pos)
+    public ChunkPath Add(LocalBlockPos pos)
     {
         var p = new NativeArray<LocalBlockPos>(Depth + 1, Allocator.Persistent);
         for (int i = 0; i < Depth; i++)
@@ -41,10 +41,10 @@ public struct BlockPath
             p[i] = Path[i];
         }
         p[Depth] = pos;
-        return new BlockPath { Path = p };
+        return new ChunkPath { Path = p };
     }
     
-    public BlockPath Add(LocalBlockPos pos, Allocator allocator)
+    public ChunkPath Add(LocalBlockPos pos, Allocator allocator)
     {
         var p = new NativeArray<LocalBlockPos>(Depth + 1, allocator);
         for (int i = 0; i < Depth; i++)
@@ -52,7 +52,7 @@ public struct BlockPath
             p[i] = Path[i];
         }
         p[Depth] = pos;
-        return new BlockPath { Path = p };
+        return new ChunkPath { Path = p };
     }
     
     public string ToHexString()
@@ -95,12 +95,12 @@ public struct BlockPath
         return BlockHasher.ExtendHash(Hash(), child);
     }
     
-    public BlockPath Displace(LocalBlockPos p)
+    public ChunkPath Displace(LocalBlockPos p)
     {
         return Displace(p.x, p.y, p.z);
     }
 
-    public BlockPath Displace(int x, int y, int z)
+    public ChunkPath Displace(int x, int y, int z)
     {
         var p = Path;
         p[^1] += new LocalBlockPos(x, y, z);
@@ -108,11 +108,11 @@ public struct BlockPath
     }
     
     [BurstCompile]
-    public static BlockPath RectifyPathToCoords(BlockPath path, Allocator allocator)
+    public static ChunkPath RectifyPathToCoords(ChunkPath path, Allocator allocator)
     {
         int depth = path.Depth;
         if (depth == 0)
-            return new BlockPath();
+            return new ChunkPath();
 
         NativeArray<LocalBlockPos> rectified = new NativeArray<LocalBlockPos>(depth, allocator);
 
@@ -154,7 +154,7 @@ public struct BlockPath
                     {
                         // root is not zero → invalid path, return empty array
                         rectified.Dispose();
-                        return new BlockPath();
+                        return new ChunkPath();
                     }
                 }
             }
@@ -166,7 +166,7 @@ public struct BlockPath
             }
         }
 
-        return new BlockPath(rectified);
+        return new ChunkPath(rectified);
     }
 }
 

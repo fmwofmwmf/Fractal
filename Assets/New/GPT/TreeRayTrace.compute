@@ -1,0 +1,212 @@
+﻿// TreeRaytrace.compute
+#pragma kernel CSMain
+
+StructuredBuffer<int4> blocks_int4; // we store block data as two int4s (for alignment)
+StructuredBuffer<int> children;     // flat children array (child node indices), -1 = none
+StructuredBuffer<int> leaves;       // flat leaves array (0 = empty, >0 = occupied)
+
+RWTexture2D<float4> Result;
+
+int screenWidth;
+int screenHeight;
+float nearPlane;
+float farPlane;
+int maxSteps;
+float stepSize;
+
+int numBlocks;
+int numChildren;
+int numLeaves;
+
+float4x4 camToWorld;
+float4x4 camInverseProjection;
+
+// helper: read GPUBlockData from two int4s
+void ReadBlock(int idx, out int type, out int renderState, out int childrenOffset, out int leavesOffset, out int depth)
+{
+    // each block stored as two int4s: blocks_int4[ idx*2 ], blocks_int4[idx*2 + 1]
+    int baseIdx = idx * 2;
+    int4 a = blocks_int4[baseIdx];
+    int4 b = blocks_int4[baseIdx + 1];
+    type = a.x;
+    renderState = a.y;
+    childrenOffset = a.z;
+    leavesOffset = a.w;
+    depth = b.x;
+    // b.y..b.w are padding
+}
+
+// Convert 3D child coords (0..15) to single index
+int Child3ToIndex(int cx, int cy, int cz)
+{
+    return cx + 16 * (cy + 16 * cz);
+}
+
+// SampleTree: returns integer leaf value (0 empty, >0 occupied/type)
+int SampleTree(float3 p)
+{
+    // p is in [0,1]^3. If outside, return 0.
+    if (any(p < 0.0) || any(p > 1.0)) return 0;
+
+    // start at root node index 0
+    int node = 0;
+    float nodeSize = 1.0;
+    float3 nodeOrigin = float3(0.0, 0.0, 0.0);
+
+    // maximum iteration guard to avoid infinite loops
+    int iter = 0;
+
+    while (true)
+    {
+        iter++;
+        if (iter > 64) return 0;
+
+        int type, renderState, childrenOffset, leavesOffset, depth;
+        ReadBlock(node, type, renderState, childrenOffset, leavesOffset, depth);
+        
+        // else if we have children pointers, step into the correct child voxel
+        if (childrenOffset >= 0)
+        {
+            float childSize = nodeSize / 16.0;
+            float3 local = (p - nodeOrigin) / childSize;
+            int cx = clamp((int)floor(local.x), 0, 15);
+            int cy = clamp((int)floor(local.y), 0, 15);
+            int cz = clamp((int)floor(local.z), 0, 15);
+            int childIndex = childrenOffset + Child3ToIndex(cx, cy, cz);
+            if (childIndex < 0 || childIndex >= numChildren) return 0;
+            int childNode = children[childIndex];
+            if (childNode < 0)
+            {
+                // no child here -> empty
+                return 0;
+            }
+            // descend
+            // update origin and size
+            nodeOrigin += float3(cx, cy, cz) * childSize;
+            nodeSize = childSize;
+            node = childNode;
+            continue;
+        }
+
+        // if this node has leaves (a final grid), sample there
+        if (leavesOffset >= 0)
+        {
+            // compute local index within this node's 16^3 grid
+            float localScale = 16.0 / nodeSize; // actually 16/nodeSize? careful:
+            // The child voxel size is nodeSize / 16
+            float childSize = nodeSize / 16.0;
+            float3 local = (p - nodeOrigin) / childSize; // in [0..16)
+            int cx = clamp((int)floor(local.x), 0, 15);
+            int cy = clamp((int)floor(local.y), 0, 15);
+            int cz = clamp((int)floor(local.z), 0, 15);
+            int li = leavesOffset + Child3ToIndex(cx, cy, cz);
+            if (li < 0 || li >= numLeaves) return 0;
+            return leaves[li];
+        }
+
+        // no leaves and no children: treat as empty
+        return 0;
+    }
+    return 0;
+}
+
+// very simple normal estimate by sampling neighboring occupancy
+float3 EstimateNormal(float3 p)
+{
+    float eps = 0.002;
+    int s = SampleTree(p);
+    float dx = SampleTree(p + float3(eps,0,0)) - SampleTree(p - float3(eps,0,0));
+    float dy = SampleTree(p + float3(0,eps,0)) - SampleTree(p - float3(0,eps,0));
+    float dz = SampleTree(p + float3(0,0,eps)) - SampleTree(p - float3(0,0,eps));
+    float3 n = normalize(float3(dx,dy,dz));
+    return n;
+}
+
+bool IsOpaque(int t)
+{
+    return (t & 3) != 0;
+}
+
+float3 GetColor(int t)
+{
+    switch (t)
+    {
+        case 1://World
+            return float3(0.0, 1.0, 0.0);
+        case 2://Grass
+            return float3(0.0, 1.0, 0.0);
+        case 3://Dirt
+            return float3(1.0, 1.0, 0.0);
+        default:
+            return float3(1.0, 0.0, 1.0);
+    }
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= screenWidth || id.y >= screenHeight) return;
+
+    // generate NDC coordinates [-1,1]
+    float u = ( (float)id.x / (float)screenWidth ) * 2.0 - 1.0;
+    float v = ( (float)id.y / (float)screenHeight ) * 2.0 - 1.0;
+    // flip v if necessary depending on projection
+    //v = -v;
+    //Result[id.xy] = leaves[i + j * 16] == 1? float4(1,0,0,1) : float4(0,0,0,1);
+    //Result[id.xy] = blocks_int4[0].x != 0? float4(0,0,0,1) : float4(1,0,0,1);
+    //return;
+    
+    // reconstruct view space ray
+    float4 clip = float4(u, v, -1.0, 1.0);
+    float4 view = mul(camInverseProjection, clip);
+    view /= view.w;
+    float4 worldPos4 = mul(camToWorld, view);
+    float3 rayOrigin = mul(camToWorld, float4(0,0,0,1)).xyz;
+    float3 rayDir = normalize(worldPos4.xyz - rayOrigin);
+
+    // simple ray march in [0,1]^3
+    float t = nearPlane;
+    int hit = 0;
+    float3 hitPos = float3(0,0,0);
+    int e = 0;
+    
+    for (int step = 0; step < maxSteps; ++step)
+    {
+        e = step;
+        float3 p = rayOrigin + rayDir * t;
+        // transform world space into the unit cube coords: assume unit cube is at [0,1]^3 in world space
+        // If your world coordinate is different, apply transform here.
+        float3 unitP = p; // you may want (p - worldOrigin) / worldScale
+
+        int val = SampleTree(unitP);
+        if (IsOpaque(val))
+        {
+            hit = val;
+            hitPos = unitP;
+            break;
+        }
+        // float dist = distance(p, float3(0,0,0)) - .3;
+        // if (dist < .001)
+        // {
+        //     hit = 1;
+        //     break;
+        // }
+
+        t += stepSize;
+        if (t > farPlane) break;
+    }
+
+    float4 color = float4(0,0,0,0);
+    float4 stepColor = float4(0,0,0,1);
+    if (hit != 0)
+    {
+        float3 n = EstimateNormal(hitPos);
+        float3 lightDir = normalize(float3(0.6, 0.7, -0.5));
+        float diff = max(0, dot(n, lightDir));
+        float3 baseColor = GetColor(hit); // simple color by leaf value
+        color = float4(baseColor * diff, 1);
+        stepColor = float4(baseColor * (float)e/maxSteps, 1);
+    }
+    
+    Result[id.xy] = stepColor;
+}
