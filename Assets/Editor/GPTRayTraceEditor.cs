@@ -1,7 +1,7 @@
 ﻿using UnityEditor;
 using UnityEngine;
 
-[CustomEditor(typeof(BlockRendererNew))]
+[CustomEditor(typeof(BlockRenderer))]
 public class MyScriptEditor2 : Editor
 {
     public override void OnInspectorGUI()
@@ -10,7 +10,7 @@ public class MyScriptEditor2 : Editor
         DrawDefaultInspector();
 
         // Add a button
-        BlockRendererNew script = (BlockRendererNew)target;
+        BlockRenderer script = (BlockRenderer)target;
         if (GUILayout.Button("Eval"))
         {
             script.ReDraw();

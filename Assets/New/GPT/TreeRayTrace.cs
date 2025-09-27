@@ -1,8 +1,12 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
 using Unity.Mathematics;
+using UnityEngine.Profiling;
 using UnityEngine.UI;
 
 public class TreeRaytrace : MonoBehaviour
@@ -21,15 +25,24 @@ public class TreeRaytrace : MonoBehaviour
         public int LeavesOffset;
         public int Depth;
         // padding to make size multiple of 16 bytes (32 bytes total)
-        public int pad1;
-        public int pad2;
+        public int parentId;
+        public int localIndex;
         public int pad3;
-    }
 
-    // These are the data your generator should fill
-    private NativeArray<GPUBlockDataPadded> gpuBlocks = new();
-    private NativeArray<int> gpuChildren = new(); // child node indices (-1 = none)
-    private NativeArray<int> gpuLeaves = new();   // leaf occupancy / type (0 empty)
+        public static GPUBlockDataPadded FromBlock(Block b)
+        {
+            return new GPUBlockDataPadded()
+            {
+                Type = b.Type,
+                RenderState = b.Rendered ? 1 : 0,
+                Depth = b.Depth,
+                ChildrenOffset = b.Expanded ? b.Id * Const.ChunkScale : -1,
+                LeavesOffset = b.Id * Const.ChunkScale,
+                parentId = b.parentId,
+                localIndex = BlockPath.ToInt(b.Path[^1])
+            };
+        }
+    }
 
     ComputeBuffer blocksBuffer;
     ComputeBuffer childrenBuffer;
@@ -47,6 +60,7 @@ public class TreeRaytrace : MonoBehaviour
     public int maxSteps = 512;
     public float stepSize = 1.0f / 256.0f; // how far we march each step (tweak)
     public bool working;
+    [HideInInspector] public int root;
 
     void Start()
     {
@@ -57,19 +71,136 @@ public class TreeRaytrace : MonoBehaviour
     void OnDestroy()
     {
         ReleaseBuffers();
-        if (gpuBlocks.IsCreated) gpuBlocks.Dispose();
-        if (gpuChildren.IsCreated) gpuChildren.Dispose();
-        if (gpuLeaves.IsCreated) gpuLeaves.Dispose();
     }
 
-    public void UpdateData(NativeArray<GPUBlockDataPadded> blocks, NativeArray<int> children, NativeArray<int> leaves)
+    public void InitializeData(NativeArray<GPUBlockDataPadded> blocks, NativeArray<int> children, NativeArray<int> leaves)
     {
-        if (gpuBlocks.IsCreated) gpuBlocks.Dispose();
-        if (gpuChildren.IsCreated) gpuChildren.Dispose();
-        if (gpuLeaves.IsCreated) gpuLeaves.Dispose();
-        gpuBlocks = blocks;
-        gpuChildren = children;
-        gpuLeaves = leaves;
+        ReleaseBuffers();
+        Profiler.BeginSample("AllocateBlocks");
+        blocksBuffer = new ComputeBuffer(blocks.Length, Marshal.SizeOf(typeof(GPUBlockDataPadded)), ComputeBufferType.Structured, ComputeBufferMode.SubUpdates);
+        childrenBuffer = new ComputeBuffer(children.Length, sizeof(int), ComputeBufferType.Structured, ComputeBufferMode.SubUpdates);
+        leavesBuffer = new ComputeBuffer(leaves.Length, sizeof(int), ComputeBufferType.Structured, ComputeBufferMode.SubUpdates);
+        Profiler.EndSample();
+        Profiler.BeginSample("SetBlocks");
+        if (blocks.Length > 0)
+        {
+            var blocksPtr = blocksBuffer.BeginWrite<GPUBlockDataPadded>(0, blocks.Length);
+            var blocksJob = new CopyNativeArrayJob<GPUBlockDataPadded>
+            {
+                Source = blocks,
+                Target = blocksPtr
+            };
+            blocksJob.Schedule(blocks.Length, 64).Complete();
+            blocksBuffer.EndWrite<GPUBlockDataPadded>(blocks.Length);
+        }
+
+        if (children.Length > 0)
+        {
+            var childrenPtr = childrenBuffer.BeginWrite<int>(0, children.Length);
+            var childrenJob = new CopyNativeArrayJob<int>
+            {
+                Source = children,
+                Target = childrenPtr
+            };
+            childrenJob.Schedule(children.Length, 256).Complete();
+            childrenBuffer.EndWrite<int>(children.Length);
+        }
+
+        if (leaves.Length > 0)
+        {
+            var leavesPtr = leavesBuffer.BeginWrite<int>(0, leaves.Length);
+            var leavesJob = new CopyNativeArrayJob<int>
+            {
+                Source = leaves,
+                Target = leavesPtr
+            };
+            leavesJob.Schedule(leaves.Length, 256).Complete();
+            leavesBuffer.EndWrite<int>(leaves.Length);
+        }
+        Profiler.EndSample();
+    }
+    
+    [BurstCompile]
+    struct CopyNativeArrayJob<T> : IJobParallelFor where T : struct
+    {
+        [ReadOnly] public NativeArray<T> Source;
+        public NativeArray<T> Target;
+
+        public void Execute(int index)
+        {
+            Target[index] = Source[index];
+        }
+    }
+    
+    public void UpdateData(
+        NativeArray<Block> blocks,
+        NativeArray<int> children,
+        NativeArray<int> leaves,
+        NativeArray<(int, bool, bool)> changedIndices)
+    {
+        if (changedIndices.Length == 0)
+            return;
+
+        // --- Update blocks (only changed indices) ---
+        var blocksPtr = blocksBuffer.BeginWrite<GPUBlockDataPadded>(0, blocks.Length);
+        var childrenPtr = childrenBuffer.BeginWrite<int>(0, children.Length);
+        var leavesPtr = leavesBuffer.BeginWrite<int>(0, leaves.Length);
+        
+        var job = new UpdateChangedJob
+        {
+            SourceBlocks = blocks,
+            SourceChildren = children,
+            SourceLeaves = leaves,
+            TargetBlocks = blocksPtr,
+            TargetChildren = childrenPtr,
+            TargetLeaves = leavesPtr,
+            ChangedIndices = changedIndices
+        };
+        Debug.Log(changedIndices.Length);
+        job.Schedule(changedIndices.Length, 64).Complete();
+        blocksBuffer.EndWrite<GPUBlockDataPadded>(blocks.Length);
+        childrenBuffer.EndWrite<int>(children.Length);
+        leavesBuffer.EndWrite<int>(leaves.Length);
+
+        // Children & leaves typically don’t need partial updates
+        // unless you’re also tracking which children/leaves changed.
+        // If you are, you can do the exact same pattern as above.
+    }
+
+    [BurstCompile]
+    struct UpdateChangedJob : IJobParallelFor
+    {
+        [NativeDisableContainerSafetyRestriction] [ReadOnly] public NativeArray<Block> SourceBlocks;
+        [ReadOnly] public NativeArray<int> SourceChildren;
+        [ReadOnly] public NativeArray<int> SourceLeaves;
+        [NativeDisableParallelForRestriction] public NativeArray<GPUBlockDataPadded> TargetBlocks;
+        [NativeDisableParallelForRestriction] public NativeArray<int> TargetChildren;
+        [NativeDisableParallelForRestriction] public NativeArray<int> TargetLeaves;
+        [ReadOnly] public NativeArray<(int, bool, bool)> ChangedIndices;
+
+        public void Execute(int index)
+        {
+            var (srcIndex, children, leaves) = ChangedIndices[index];
+            Block b = SourceBlocks[srcIndex];
+            GPUBlockDataPadded data = GPUBlockDataPadded.FromBlock(b);
+            TargetBlocks[srcIndex] = data;
+            if (children)
+            {
+                for (int i = 0; i < Const.ChunkScale; i++)
+                {
+                    TargetChildren[srcIndex * Const.ChunkScale + i] = SourceChildren[srcIndex * Const.ChunkScale + i];
+                }
+            }
+
+            if (leaves)
+            {
+                for (int i = 0; i < Const.ChunkScale; i++)
+                {
+                    TargetLeaves[srcIndex * Const.ChunkScale + i] = SourceLeaves[srcIndex * Const.ChunkScale + i];
+                }
+            }
+            
+        }
     }
 
     void InitRenderTexture()
@@ -96,43 +227,6 @@ public class TreeRaytrace : MonoBehaviour
         if (leavesBuffer != null) { leavesBuffer.Release(); leavesBuffer = null; }
     }
 
-    // Call when gpuBlocks/gpuChildren/gpuLeaves changed
-    public void UpdateGPUBuffers()
-    {
-        ReleaseBuffers();
-
-        if (gpuBlocks.Length > 0)
-        {
-            blocksBuffer = new ComputeBuffer(gpuBlocks.Length, Marshal.SizeOf(typeof(GPUBlockDataPadded)), ComputeBufferType.Structured);
-            blocksBuffer.SetData(gpuBlocks);
-        }
-        else
-        {
-            Debug.Log("killed");
-        }
-
-        if (gpuChildren.Length > 0)
-        {
-            childrenBuffer = new ComputeBuffer(gpuChildren.Length, sizeof(int), ComputeBufferType.Structured);
-            childrenBuffer.SetData(gpuChildren);
-        }
-        else
-        {
-            childrenBuffer = new ComputeBuffer(1, sizeof(int));
-            childrenBuffer.SetData(new int[] { -1 });
-        }
-
-        if (gpuLeaves.Length > 0)
-        {
-            leavesBuffer = new ComputeBuffer(gpuLeaves.Length, sizeof(int), ComputeBufferType.Structured);
-            leavesBuffer.SetData(gpuLeaves);
-        }
-        else
-        {
-            Debug.Log("killed");
-        }
-    }
-
     void Update()
     {
         if (raytraceShader == null || !working) return;
@@ -154,15 +248,11 @@ public class TreeRaytrace : MonoBehaviour
 
         raytraceShader.SetInt("screenWidth", targetWidth);
         raytraceShader.SetInt("screenHeight", targetHeight);
+        raytraceShader.SetInt("root", root);
         raytraceShader.SetFloat("nearPlane", near);
         raytraceShader.SetFloat("farPlane", far);
         raytraceShader.SetInt("maxSteps", maxSteps);
         raytraceShader.SetFloat("stepSize", stepSize);
-
-        // tree metadata
-        raytraceShader.SetInt("numBlocks", gpuBlocks.Length);
-        raytraceShader.SetInt("numChildren", gpuChildren.Length);
-        raytraceShader.SetInt("numLeaves", gpuLeaves.Length);
 
         // dispatch (8x8 threads)
         int threadGroupsX = Mathf.CeilToInt(targetWidth / 8.0f);

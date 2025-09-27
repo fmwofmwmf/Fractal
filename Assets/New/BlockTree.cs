@@ -7,11 +7,11 @@ public unsafe class BlockTree
 {
     public const int Size = 16 * 16 * 16 * 16;
     public NativePool2 Blocks = new (Size, Allocator.Persistent);
-
+    public NativeHashSet<(int, bool, bool)> Changes = new (Const.ChunkScale, Allocator.Persistent);
     public Block GenerateRoot()
     {
         var i = Blocks.Allocate();
-        Blocks[i] = new Block(i, 2, new(0, Allocator.Persistent), int3.zero);
+        Blocks[i] = new Block(this, i, -1, 2, new(0, Allocator.Persistent), int3.zero);
         return Blocks[i];
     }
 
@@ -19,12 +19,17 @@ public unsafe class BlockTree
     {
         if (!block->Expanded) return;
 
-        foreach (var blockChild in block->Children)
+        foreach (var blockChild in block->Children(this))
         {
             Delete(blockChild);
         }
-
-        block->Children.Dispose();
+        block->Expanded = false;
+        MarkDirty(block->Id, true, false);
+    }
+    
+    public void MarkDirty(int index, bool children, bool leaves)
+    {
+        Changes.Add((index, children, leaves));
     }
 
     private void Delete(int i)
@@ -41,6 +46,8 @@ public unsafe class BlockTree
         {
             block.Dispose();
         }
+
+        Changes.Dispose();
         Blocks.Dispose();
     }
 }

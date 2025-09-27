@@ -4,85 +4,100 @@ using TMPro;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Profiling;
 
 public unsafe class BlockRenderer : MonoBehaviour
 {
     public BlockTree World;
     private Block _root;
     private readonly Queue<int> _processQueue = new ();
-    private readonly Queue<int> _renderQueue = new ();
     public TextMeshProUGUI text;
     
     public List<int3> center;
     private NativeArray<int3> _centerPath;
     
-    public Dictionary<int, (Mesh, Vector3)> Rendered = new ();
-    public Material material;
-    public int batch;
+    public float maxFrameTime;
+    public TreeRaytrace raytrace;
+    public Transform player;
+    private bool _init;
+    public bool dirty;
+    private Dictionary<int, (Mesh, GameObject)> MeshDict = new();
     private void Start()
     {
         World = new BlockTree();
         _root = World.GenerateRoot();
         _processQueue.Enqueue(_root.Id);
     }
+
+    public void ReDraw()
+    {
+        _processQueue.Enqueue(_root.Id);
+        dirty = true;
+    }
+    
+    public void InitializeTree()
+    {
+        var temp = Time.realtimeSinceStartup;
+        GpuTreeBuilder.BuildGpuArraysFat(World.Blocks.List, out var list);
+        raytrace.InitializeData(list, World.Blocks.Children, World.Blocks.Leaves);
+        print ("Init: "+ (Time.realtimeSinceStartup - temp).ToString("f6"));
+        raytrace.working = true;
+    }
     
     public void ReEvaluateTree()
     {
-        if (_processQueue.Count == 0) _processQueue.Enqueue(_root.Id);
-        // Block* root = World.Blocks.GetPtr(_root.Id);
-        // UnRender(root);
-        // World.DePopulate(root);
-        // if (World.Blocks.FreeCount != World.Blocks.Capacity - 1)
-        // {
-        //     int j = 0;
-        //     foreach (var i in World.Blocks.List)
-        //     {
-        //         if (i.IsValid)
-        //         {
-        //             _renderQueue.Enqueue(i.Id);
-        //             j++;
-        //         }
-        //     }
-        //     Debug.Log($"Failed {j}, failed_check {World.Blocks.Capacity - 1 - World.Blocks.FreeCount}");
-        // }
-        // else
-        // {
-        //     _processQueue.Enqueue(_root.Id);
-        // }
+        var temp = Time.realtimeSinceStartup;
+        Profiler.BeginSample("Allocate Changes");
+        var changes = World.Changes.ToNativeArray(Allocator.TempJob);
+        Profiler.EndSample();
+        Profiler.BeginSample("Build Buffer");
+        raytrace.UpdateData(World.Blocks.List, World.Blocks.Children, World.Blocks.Leaves, changes);
+        Profiler.EndSample();
+        changes.Dispose();
+        World.Changes.Clear();
+        //print ("Update: "+ (Time.realtimeSinceStartup - temp).ToString("f6"));
     }
 
     private void Update()
     {
-        RenderParams rp = new RenderParams(material);
-        foreach (var (mesh, pos) in Rendered.Values)
-        {
-            Graphics.RenderMesh(rp, mesh, 0, transform.localToWorldMatrix * Matrix4x4.Translate(pos));
-        }
-
         _centerPath.Dispose();
         _centerPath = new NativeArray<int3>(center.ToArray(), Allocator.Persistent);
+        _centerPath[^1] += (int3)math.floor(player.transform.position*math.pow(16, _centerPath.Length-1));
+        _centerPath = BlockPath.RectifyPathToCoords(_centerPath);
+        text.text = $"{_processQueue.Count}\n{World.Blocks.Capacity - World.Blocks.FreeCount}";
         
-        text.text = $"{_processQueue.Count} {_renderQueue.Count}\n{World.Blocks.Capacity - World.Blocks.FreeCount}";
-        for (int i = 0; i < batch; i++)
-        {
-            if (_processQueue.Count > 0) Process();
-            if (_processQueue.Count == 0 && _renderQueue.Count > 0) Render();
+        float startTime = Time.realtimeSinceStartup;
+        while (_processQueue.Count > 0) {
+            Process();
+            if (Time.realtimeSinceStartup - startTime > maxFrameTime)
+            {
+                break; // stop for this frame, continue next frame
+            }
         }
-        //if (_processQueue.Count == 0) _processQueue.Enqueue(_root.Id);
-    }
 
-    private void UnRender(Block* block)
-    {
-        Rendered.Remove(block->Id);
-        block->Rendered = false;
-        if (!block->Expanded) return;
-
-        foreach (int blockChild in block->Children)
+        raytrace.root = 0;
+        
+        if (dirty && _processQueue.Count == 0)
         {
-            UnRender(World.Blocks.GetPtr(blockChild));
+            dirty = false;
+            if (!_init)
+            {
+                _init = true;
+                InitializeTree();
+            }
+            else
+            {
+                ReEvaluateTree();
+            }
+        }
+
+        if (_processQueue.Count == 0)
+        {
+            dirty = true;
+            _processQueue.Enqueue(_root.Id);
         }
     }
-
+    
     public void Process()
     {
         int i = _processQueue.Dequeue();
@@ -95,16 +110,20 @@ public unsafe class BlockRenderer : MonoBehaviour
         }
         if (c->Depth < _centerPath.Length)
         {
+            if (c->Depth == _centerPath.Length - 1 && dist < 3)
+            {
+                //MeshBlock(c);
+            }
+            else if (c->Rendered)
+            {
+                UnMeshBlock(c);
+            }
+
             if (dist < 2)
             {
                 if (!c->Expanded) c->GenerateChildren(World);
-                if (c->Rendered)
-                {
-                    UnRender(c);
-                }
-                Debug.Assert(c->Expanded);
-                //Debug.Assert(World.Blocks[c->Children(World)[16*16*16 -1]].Type == 1 || c->Type==0);
-                foreach (var j in c->Children)
+
+                foreach (var j in c->Children(World))
                 {
                     Debug.Assert(World.Blocks[j].IsValid);
                     _processQueue.Enqueue(j);
@@ -112,31 +131,38 @@ public unsafe class BlockRenderer : MonoBehaviour
             }
             else
             {
-                if (!c->Rendered) _renderQueue.Enqueue(i);
                 if (c->Expanded)
                 {
-                    UnRender(c);
                     World.DePopulate(c);
-                    _renderQueue.Enqueue(i);
                 }
             }
         }
-        else
+    }
+
+    private void UnMeshBlock(Block* block)
+    {
+        if (MeshDict.TryGetValue(block->Id, out var contents))
         {
-            if (!c->Rendered) _renderQueue.Enqueue(i);
+            Destroy(contents.Item2);
+            MeshDict.Remove(block->Id);
         }
     }
 
-    public void Render()
+    private void MeshBlock(Block* block)
     {
-        int i = _renderQueue.Dequeue();
-        Block* c = World.Blocks.GetPtr(i);
-        if (c->Type == 0) return;
-        c->Rendered = true;
+        if (block -> Rendered) return;
+        block->Rendered = true;
+        UnMeshBlock(block);
 
-        var mesh = BlockMesher.BuildChunkMeshes(c, false, 0);
-        
-        Rendered[i] = (mesh, BlockUtils.GetWorldPosition(*c));
+        Mesh mesh = BlockMesher.BuildBlockMesh(World, block, false, _centerPath.Length-1);
+            
+        GameObject go = new GameObject(mesh.name);
+        go.transform.position = BlockPath.GetRelativeWorldPosition(_centerPath, block->Path);
+        var mc = go.AddComponent<MeshCollider>();
+        mc.sharedMesh = mesh;
+        mc.convex = false;
+
+        MeshDict[block->Id] = (mesh, go);
     }
 
     private void OnDestroy()

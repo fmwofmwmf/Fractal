@@ -10,9 +10,11 @@ using UnityEngine.Profiling;
 
 public unsafe static class BlockMesher
 {
-    public static Mesh BuildChunkMeshes(Block* block, bool lod, int scale)
+    public static Mesh BuildBlockMesh(BlockTree world, Block* block, bool lod, int scale)
     {
         NativeArray<byte> neighborhood = new NativeArray<byte>(18 * 18 * 18, Allocator.TempJob);
+        int offset = block->Id * Const.ChunkScale;
+        var leaves = world.Blocks.Leaves;
         
         for (int x = -1; x <= 16; x++)
         for (int y = -1; y <= 16; y++)
@@ -26,7 +28,7 @@ public unsafe static class BlockMesher
             {
                 int flatIndex1 = x + 16 * (y + 16 * z);
                     
-                if (block->Leaves[flatIndex1] != 0)
+                if ((leaves[offset + flatIndex1] & 3) != 0)
                 {
                     neighborhood[flatIndex] = 1;
                 }

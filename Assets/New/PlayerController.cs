@@ -6,12 +6,13 @@ public class PlayerController : MonoBehaviour
     public float moveSpeed = 5f;
     public float lookSpeed = 2f;
     public Transform cameraTransform;
-
+    private Rigidbody _rb;
     private float pitch = 0f;
 
     private void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
+        _rb = GetComponent<Rigidbody>();
     }
 
     private void Update()
@@ -34,7 +35,7 @@ public class PlayerController : MonoBehaviour
         Vector3 right = cameraTransform.right;
 
         Vector3 move = forward * v + right * h + Vector3.up * y;
-        transform.position += move * moveSpeed * Time.deltaTime;
+        _rb.linearVelocity = move * moveSpeed;
     }
 
     private void HandleCamera()

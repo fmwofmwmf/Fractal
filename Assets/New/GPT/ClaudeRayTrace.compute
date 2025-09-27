@@ -303,6 +303,173 @@ int SampleTree(float3 p)
     return SampleTreeFromNode(p, root);
 }
 
+// DDA-based hierarchical voxel traversal
+struct DDARaycastHit
+{
+    bool hit;
+    int value;
+    float3 position;
+    float3 normal;  // Surface normal of hit face
+    int steps;
+};
+
+// Get the smallest possible voxel size in the tree (for DDA step sizing)
+float GetMinVoxelSize()
+{
+    // Since each level subdivides by 16x, and we have a reasonable max depth limit,
+    // we can calculate the theoretical minimum voxel size.
+    // For a hierarchical 16^3 tree, typical max depth is around 4-6 levels.
+    // We'll use a conservative estimate based on your tree structure.
+    
+    // If leaves represent the finest level (16^3 within a node), 
+    // and nodes can be nested several levels deep:
+    // Level 0: 1.0 (root)
+    // Level 1: 1.0/16 (first subdivision) 
+    // Level 2: 1.0/(16*16) (if nodes have child nodes)
+    // Level N: 1.0/pow(16, N)
+    
+    // For practical DDA, we want a step size that won't miss details
+    // but isn't unnecessarily small. A reasonable approach is to use
+    // a fixed small step size based on expected tree depth.
+    
+    return 1.0 / (16.0 * 16.0 * 16.0); // Assumes ~3 levels max for good performance
+}
+
+bool IsOpaque(int t)
+{
+    return (t & 3) != 0;
+}
+
+// DDA raycast through the voxel hierarchy
+DDARaycastHit DDARaycast(float3 rayOrigin, float3 rayDir, float maxDistance)
+{
+    DDARaycastHit result;
+    result.hit = false;
+    result.value = 0;
+    result.position = float3(0, 0, 0);
+    result.normal = float3(0, 0, 0);
+    result.steps = 0;
+    
+    // Normalize ray direction to avoid issues
+    rayDir = normalize(rayDir);
+    
+    // Find intersection with unit cube [0,1]^3
+    float3 invDir = 1.0 / (rayDir + sign(rayDir) * 1e-6); // Avoid division by zero, preserve sign
+    float3 t1 = (0.0 - rayOrigin) * invDir;
+    float3 t2 = (1.0 - rayOrigin) * invDir;
+    float3 tmin = min(t1, t2);
+    float3 tmax = max(t1, t2);
+    
+    float tenter = max(max(tmin.x, tmin.y), tmin.z);
+    float texit = min(min(tmax.x, tmax.y), tmax.z);
+    
+    // No intersection with cube or ray pointing away
+    if (tenter >= texit || texit < 0.0) return result;
+    
+    // Start ray at entry point (or ray origin if already inside)
+    float tstart = max(tenter, 0.0);
+    float3 startPos = rayOrigin + rayDir * tstart;
+    
+    // Clamp to unit cube bounds to handle floating point precision issues
+    startPos = clamp(startPos, 0.0001, 0.9999);
+    
+    // Fixed step size for consistent DDA traversal
+    float voxelSize = GetMinVoxelSize();
+    
+    // DDA setup - work in voxel grid coordinates
+    int3 mapPos = int3(floor(startPos / voxelSize));
+    int3 stepDir = int3(sign(rayDir));
+    
+    // Prevent zero step direction (ray parallel to axis)
+    if (stepDir.x == 0) stepDir.x = 1;
+    if (stepDir.y == 0) stepDir.y = 1;
+    if (stepDir.z == 0) stepDir.z = 1;
+    
+    // Calculate delta distances (distance along ray to cross one voxel)
+    float3 deltaDist = abs(voxelSize / rayDir);
+    
+    // Calculate initial side distances
+    float3 sideDist;
+    float3 currentVoxelPos = float3(mapPos) * voxelSize;
+    
+    if (rayDir.x > 0) {
+        sideDist.x = ((mapPos.x + 1) * voxelSize - startPos.x) / rayDir.x;
+    } else {
+        sideDist.x = (startPos.x - mapPos.x * voxelSize) / (-rayDir.x);
+    }
+    
+    if (rayDir.y > 0) {
+        sideDist.y = ((mapPos.y + 1) * voxelSize - startPos.y) / rayDir.y;
+    } else {
+        sideDist.y = (startPos.y - mapPos.y * voxelSize) / (-rayDir.y);
+    }
+    
+    if (rayDir.z > 0) {
+        sideDist.z = ((mapPos.z + 1) * voxelSize - startPos.z) / rayDir.z;
+    } else {
+        sideDist.z = (startPos.z - mapPos.z * voxelSize) / (-rayDir.z);
+    }
+    
+    // Track which face we hit for normal calculation
+    float3 hitNormal = float3(0, 0, 1); // Default normal (in case we start inside a voxel)
+    
+    // DDA traversal
+    float currentDist = tstart;
+    int maxVoxelsToCheck = int(ceil(maxDistance / voxelSize)) + 1;
+    maxVoxelsToCheck = min(maxVoxelsToCheck, maxSteps); // Respect shader limits
+    
+    for (int step = 0; step < maxVoxelsToCheck; step++)
+    {
+        result.steps = step + 1;
+        
+        // Calculate current world position (center of current voxel)
+        float3 currentPos = (float3(mapPos) + 0.5) * voxelSize;
+        
+        // Check bounds
+        if (any(currentPos < 0.0) || any(currentPos > 1.0)) break;
+        if (currentDist > maxDistance) break;
+        
+        // Sample the voxel tree at this position
+        int value = SampleTree(currentPos);
+        if (IsOpaque(value))
+        {
+            result.hit = true;
+            result.value = value;
+            result.position = currentPos;
+            result.normal = hitNormal; // Use the normal from the face we just crossed
+            return result;
+        }
+        
+        // DDA step - move to next voxel boundary and calculate the normal for the face we're crossing
+        if (sideDist.x < sideDist.y && sideDist.x < sideDist.z)
+        {
+            currentDist = tstart + sideDist.x;
+            sideDist.x += deltaDist.x;
+            mapPos.x += stepDir.x;
+            // Set normal for the X face we're crossing
+            hitNormal = float3(stepDir.x > 0 ? -1.0 : 1.0, 0, 0);
+        }
+        else if (sideDist.y < sideDist.z)
+        {
+            currentDist = tstart + sideDist.y;
+            sideDist.y += deltaDist.y;
+            mapPos.y += stepDir.y;
+            // Set normal for the Y face we're crossing
+            hitNormal = float3(0, stepDir.y > 0 ? -1.0 : 1.0, 0);
+        }
+        else
+        {
+            currentDist = tstart + sideDist.z;
+            sideDist.z += deltaDist.z;
+            mapPos.z += stepDir.z;
+            // Set normal for the Z face we're crossing
+            hitNormal = float3(0, 0, stepDir.z > 0 ? -1.0 : 1.0);
+        }
+    }
+    
+    return result;
+}
+
 // very simple normal estimate by sampling neighboring occupancy
 float3 EstimateNormal(float3 p)
 {
@@ -315,10 +482,6 @@ float3 EstimateNormal(float3 p)
     return n;
 }
 
-bool IsOpaque(int t)
-{
-    return (t & 3) != 0;
-}
 
 float3 GetColor(int t)
 {
@@ -345,11 +508,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     // generate NDC coordinates [-1,1]
     float u = ( (float)id.x / (float)screenWidth ) * 2.0 - 1.0;
     float v = ( (float)id.y / (float)screenHeight ) * 2.0 - 1.0;
-    // flip v if necessary depending on projection
-    //v = -v;
-    //Result[id.xy] = leaves[id.x + id.y * 16] == 0? float4(1,0,0,1) : float4(0,0,0,1);
-    //Result[id.xy] = blocks_int4[0].x != 0? float4(1,0,0,1) : float4(0,0,0,1);
-    //return;
     
     // reconstruct view space ray
     float4 clip = float4(u, v, -1.0, 1.0);
@@ -359,49 +517,22 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     float3 rayOrigin = mul(camToWorld, float4(0,0,0,1)).xyz;
     float3 rayDir = normalize(worldPos4.xyz - rayOrigin);
 
-    // simple ray march in [0,1]^3
-    float t = nearPlane;
-    int hit = 0;
-    float3 hitPos = float3(0,0,0);
-    int e = 0;
-    
-    for (int step = 0; step < maxSteps; ++step)
-    {
-        e = step;
-        float3 p = rayOrigin + rayDir * t;
-        // transform world space into the unit cube coords: assume unit cube is at [0,1]^3 in world space
-        // If your world coordinate is different, apply transform here.
-        float3 unitP = p; // you may want (p - worldOrigin) / worldScale
-
-        int val = SampleTree(unitP);
-        if (IsOpaque(val))
-        {
-            hit = val;
-            hitPos = unitP;
-            break;
-        }
-        // float dist = distance(p, float3(0,0,0)) - .3;
-        // if (dist < .001)
-        // {
-        //     hit = 1;
-        //     break;
-        // }
-
-        t += stepSize;
-        if (t > farPlane) break;
-    }
+    // Use DDA raycast instead of uniform ray marching
+    DDARaycastHit hit = DDARaycast(rayOrigin, rayDir, farPlane - nearPlane);
 
     float4 color = float4(0,0,0,0);
-    float4 stepColor = float4(0,0,0,1);
-    if (hit != 0)
+    if (hit.hit)
     {
-        //float3 n = EstimateNormal(hitPos);
-        //float3 lightDir = normalize(float3(0.6, 0.7, -0.5));
-        //float diff = max(0, dot(n, lightDir));
-        float3 baseColor = GetColor(hit); // simple color by leaf value
-        //color = float4(baseColor * diff, 1);
-        stepColor = float4(baseColor * (1-(float)e/maxSteps), 1);
+        float3 baseColor = GetColor(hit.value);
+        
+        // Use the accurate surface normal from DDA
+        float3 lightDir = normalize(float3(0.6, 0.7, -0.5));
+        float diff = max(0.3, dot(hit.normal, lightDir)); // Ambient + diffuse
+        
+        // Color based on steps taken (for debugging/visualization)
+        float stepFactor = 1.0 - (float)hit.steps / (float)maxSteps;
+        color = float4(baseColor * diff * (0.5 + 0.5 * stepFactor), 1.0);
     }
     
-    Result[id.xy] = stepColor;
+    Result[id.xy] = color;
 }
